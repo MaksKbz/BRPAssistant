@@ -35,6 +35,8 @@ import com.brp.assistant.ui.vehicle.VehicleSelectViewModel
 
 sealed class Screen(val route: String, val label: String) {
     data object ModelManager : Screen("model-manager", "Настройки ИИ")
+    /** Алиас для кнопки «Скачать» в шторке выбора модели */
+    data object Models : Screen("model-manager", "Модели")
     data object Home : Screen("home", "Главная")
     data object Situations : Screen("situations", "Инструкции")
     data object Maintenance : Screen("maintenance", "Регламент")
@@ -181,7 +183,6 @@ fun BrpNavGraph(
                 val chatVm: ChatViewModel = hiltViewModel()
                 val state by chatVm.state.collectAsStateWithLifecycle()
 
-                // Очищаем контекст чата при смене техники или режима
                 LaunchedEffect(selectedVehicleId, mode) {
                     chatVm.clearForChat(selectedVehicleId, mode)
                 }
@@ -204,7 +205,8 @@ fun BrpNavGraph(
                     isGenerating = state.isGenerating,
                     isModelReady = state.isModelReady,
                     selectedVehicleName = selectedVehicleName,
-                    availableOfflineModels = state.availableOfflineModels,
+                    // FIX: все модели каталога (не только загруженные)
+                    allOfflineModels = state.allOfflineModels,
                     activeOfflineModelId = state.activeOfflineModelId,
                     currentOnlineProvider = state.currentOnlineProvider,
                     selectedLlmModelId = state.selectedLlmModelId,
