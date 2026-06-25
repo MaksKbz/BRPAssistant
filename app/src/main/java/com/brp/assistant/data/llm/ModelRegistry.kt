@@ -2,6 +2,37 @@ package com.brp.assistant.data.llm
 
 import kotlinx.serialization.Serializable
 
+/**
+ * Формат файла модели — определяет, какой движок будет использован.
+ *
+ *  TASK      → MediaPipe LlmInference API (существующий движок)
+ *              Файлы: *.task
+ *              API:   com.google.mediapipe:tasks-genai
+ *
+ *  LITERTLM  → LiteRT-LM Engine (Stage 2, в разработке)
+ *              Файлы: *.litertlm
+ *              API:   com.google.ai.edge.litertlm:litertlm-android
+ *              Даёт доступ к Qwen3, Gemma4, Phi-4-mini-litertlm и другим
+ *              новым моделям с поддержкой NPU, Tool Use, мультимодальности.
+ *
+ * Роутинг по формату будет реализован в LlmInferenceEngine на Stage 2.
+ */
+@Serializable
+enum class ModelFormat {
+    /** .task — MediaPipe, текущий стабильный формат */
+    TASK,
+
+    /** .litertlm — LiteRT-LM, новое поколение (Stage 2) */
+    LITERTLM
+}
+
+@Serializable
+enum class PromptStyle {
+    CHATML,
+    PHI3,
+    GEMMA
+}
+
 @Serializable
 data class OfflineModelInfo(
     val id: String,
@@ -13,30 +44,28 @@ data class OfflineModelInfo(
     val minRamGb: Int,
     val promptStyle: PromptStyle,
     val description: String,
+    /** Формат файла — определяет движок вывода */
+    val format: ModelFormat = ModelFormat.TASK,
     val downloadUrl: String? = null,
     val isCustom: Boolean = false
 )
 
-@Serializable
-enum class PromptStyle {
-    CHATML,
-    PHI3,
-    GEMMA
-}
-
 /**
- * Каталог Android-совместимых офлайн-моделей в формате .task (LiteRT / MediaPipe).
+ * Каталог Android-совместимых офлайн-моделей.
  *
  * Источник: официальная коллекция litert-community на Hugging Face
  *   https://huggingface.co/collections/litert-community/android-models
  *
  * Критерии включения модели:
- *   1. Формат .task (совместим с MediaPipe LlmInference API)
+ *   1. Формат .task или .litertlm (LiteRT / MediaPipe)
  *   2. Прямое скачивание без авторизации HuggingFace (не gated)
  *   3. Свободная лицензия: Apache 2.0 или MIT
  *
  * ИСКЛЮЧЕНЫ модели семейства Gemma (Gemma license, gated):
  *   требуют логин на HuggingFace + принятие лицензии — неприемлемо для UX.
+ *
+ * Поддержка .litertlm моделей (Qwen3 и др.) будет добавлена на Stage 2
+ * после реализации LiteRtLmEngine в LlmInferenceEngine.
  *
  * Диапазон устройств: от 135 МБ (2 ГБ RAM) до 3.9 ГБ (8 ГБ RAM).
  */
@@ -49,16 +78,17 @@ object PublicOfflineModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
 
         OfflineModelInfo(
-            id             = "smollm2_135m_task",
-            title          = "SmolLM2 135M • 135 МБ",
-            repoId         = "litert-community/SmolLM2-135M-Instruct",
-            filename       = "smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task",
-            license        = "Apache 2.0",
-            approxSizeMb   = 135,
-            minRamGb       = 2,
-            promptStyle    = PromptStyle.CHATML,
-            description    = "Самая лёгкая модель — 135 МБ. Запускается на любом Android-устройстве от 2 ГБ RAM. Отвечает на простые вопросы, подходит для базовой диагностики.",
-            downloadUrl    = "https://huggingface.co/litert-community/SmolLM2-135M-Instruct/resolve/main/smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task"
+            id           = "smollm2_135m_task",
+            title        = "SmolLM2 135M • 135 МБ",
+            repoId       = "litert-community/SmolLM2-135M-Instruct",
+            filename     = "smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task",
+            license      = "Apache 2.0",
+            approxSizeMb = 135,
+            minRamGb     = 2,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.TASK,
+            description  = "Самая лёгкая модель — 135 МБ. Запускается на любом Android-устройстве от 2 ГБ RAM. Отвечает на простые вопросы, подходит для базовой диагностики.",
+            downloadUrl  = "https://huggingface.co/litert-community/SmolLM2-135M-Instruct/resolve/main/smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task"
         ),
 
         // ─────────────────────────────────────────────────────────────────────
@@ -66,16 +96,17 @@ object PublicOfflineModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
 
         OfflineModelInfo(
-            id             = "qwen2_5_0_5b_task",
-            title          = "Qwen 2.5 0.5B • 547 МБ",
-            repoId         = "litert-community/Qwen2.5-0.5B-Instruct",
-            filename       = "Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-            license        = "Apache 2.0",
-            approxSizeMb   = 547,
-            minRamGb       = 3,
-            promptStyle    = PromptStyle.CHATML,
-            description    = "547 МБ. Лёгкая модель Alibaba Qwen 2.5. Хорошее качество для своего размера, работает на большинстве смартфонов от 3 ГБ RAM.",
-            downloadUrl    = "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+            id           = "qwen2_5_0_5b_task",
+            title        = "Qwen 2.5 0.5B • 547 МБ",
+            repoId       = "litert-community/Qwen2.5-0.5B-Instruct",
+            filename     = "Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+            license      = "Apache 2.0",
+            approxSizeMb = 547,
+            minRamGb     = 3,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.TASK,
+            description  = "547 МБ. Лёгкая модель Alibaba Qwen 2.5. Хорошее качество для своего размера, работает на большинстве смартфонов от 3 ГБ RAM.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
         // ─────────────────────────────────────────────────────────────────────
@@ -83,29 +114,31 @@ object PublicOfflineModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
 
         OfflineModelInfo(
-            id             = "qwen2_5_1_5b_task",
-            title          = "Qwen 2.5 1.5B • 1.6 ГБ ⭐",
-            repoId         = "litert-community/Qwen2.5-1.5B-Instruct",
-            filename       = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-            license        = "Apache 2.0",
-            approxSizeMb   = 1638,
-            minRamGb       = 4,
-            promptStyle    = PromptStyle.CHATML,
-            description    = "1.6 ГБ. Рекомендуемая модель для большинства пользователей. Отличный баланс скорости и качества на устройствах от 4 ГБ RAM.",
-            downloadUrl    = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+            id           = "qwen2_5_1_5b_task",
+            title        = "Qwen 2.5 1.5B • 1.6 ГБ ⭐",
+            repoId       = "litert-community/Qwen2.5-1.5B-Instruct",
+            filename     = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+            license      = "Apache 2.0",
+            approxSizeMb = 1638,
+            minRamGb     = 4,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.TASK,
+            description  = "1.6 ГБ. Рекомендуемая модель для большинства пользователей. Отличный баланс скорости и качества на устройствах от 4 ГБ RAM.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
         OfflineModelInfo(
-            id             = "deepseek_r1_1_5b_task",
-            title          = "DeepSeek-R1 1.5B • 1.8 ГБ",
-            repoId         = "litert-community/DeepSeek-R1-Distill-Qwen-1.5B",
-            filename       = "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task",
-            license        = "MIT",
-            approxSizeMb   = 1831,
-            minRamGb       = 4,
-            promptStyle    = PromptStyle.CHATML,
-            description    = "1.8 ГБ. DeepSeek R1 с цепочкой рассуждений. Думает пошагово перед ответом — лучший выбор для диагностики и анализа кодов ошибок BRP.",
-            downloadUrl    = "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
+            id           = "deepseek_r1_1_5b_task",
+            title        = "DeepSeek-R1 1.5B • 1.8 ГБ",
+            repoId       = "litert-community/DeepSeek-R1-Distill-Qwen-1.5B",
+            filename     = "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task",
+            license      = "MIT",
+            approxSizeMb = 1831,
+            minRamGb     = 4,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.TASK,
+            description  = "1.8 ГБ. DeepSeek R1 с цепочкой рассуждений. Думает пошагово перед ответом — лучший выбор для диагностики и анализа кодов ошибок BRP.",
+            downloadUrl  = "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
         ),
 
         // ─────────────────────────────────────────────────────────────────────
@@ -113,30 +146,58 @@ object PublicOfflineModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
 
         OfflineModelInfo(
-            id             = "qwen2_5_3b_task",
-            title          = "Qwen 2.5 3B • 3.2 ГБ",
-            repoId         = "litert-community/Qwen2.5-3B-Instruct",
-            filename       = "Qwen2.5-3B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-            license        = "Apache 2.0",
-            approxSizeMb   = 3200,
-            minRamGb       = 6,
-            promptStyle    = PromptStyle.CHATML,
-            description    = "3.2 ГБ. Мощная модель Qwen 2.5 3B для топовых устройств (6+ ГБ RAM). Высокое качество развёрнутых ответов и технического анализа.",
-            downloadUrl    = "https://huggingface.co/litert-community/Qwen2.5-3B-Instruct/resolve/main/Qwen2.5-3B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+            id           = "qwen2_5_3b_task",
+            title        = "Qwen 2.5 3B • 3.2 ГБ",
+            repoId       = "litert-community/Qwen2.5-3B-Instruct",
+            filename     = "Qwen2.5-3B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+            license      = "Apache 2.0",
+            approxSizeMb = 3200,
+            minRamGb     = 6,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.TASK,
+            description  = "3.2 ГБ. Мощная модель Qwen 2.5 3B для топовых устройств (6+ ГБ RAM). Высокое качество развёрнутых ответов и технического анализа.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-3B-Instruct/resolve/main/Qwen2.5-3B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
         OfflineModelInfo(
-            id             = "phi4_mini_task",
-            title          = "Phi-4-mini 3.8B • 3.9 ГБ",
-            repoId         = "litert-community/Phi-4-mini-instruct",
-            filename       = "Phi-4-mini-instruct_multi-prefill-seq_q8_ekv1280.task",
-            license        = "MIT",
-            approxSizeMb   = 3940,
-            minRamGb       = 8,
-            promptStyle    = PromptStyle.PHI3,
-            description    = "3.9 ГБ. Microsoft Phi-4-mini — флагманская офлайн-модель. Качество близко к облачным сервисам. Требует 8+ ГБ RAM (Galaxy S23+, Pixel 8 Pro).",
-            downloadUrl    = "https://huggingface.co/litert-community/Phi-4-mini-instruct/resolve/main/Phi-4-mini-instruct_multi-prefill-seq_q8_ekv1280.task"
+            id           = "phi4_mini_task",
+            title        = "Phi-4-mini 3.8B • 3.9 ГБ",
+            repoId       = "litert-community/Phi-4-mini-instruct",
+            filename     = "Phi-4-mini-instruct_multi-prefill-seq_q8_ekv1280.task",
+            license      = "MIT",
+            approxSizeMb = 3940,
+            minRamGb     = 8,
+            promptStyle  = PromptStyle.PHI3,
+            format       = ModelFormat.TASK,
+            description  = "3.9 ГБ. Microsoft Phi-4-mini — флагманская офлайн-модель. Качество близко к облачным сервисам. Требует 8+ ГБ RAM (Galaxy S23+, Pixel 8 Pro).",
+            downloadUrl  = "https://huggingface.co/litert-community/Phi-4-mini-instruct/resolve/main/Phi-4-mini-instruct_multi-prefill-seq_q8_ekv1280.task"
         )
+
+        // ─────────────────────────────────────────────────────────────────────
+        // TODO Stage 2: добавить после реализации LiteRtLmEngine
+        //
+        // OfflineModelInfo(
+        //     id      = "qwen3_0_6b_litertlm",
+        //     title   = "Qwen3 0.6B • ~600 МБ",
+        //     format  = ModelFormat.LITERTLM,
+        //     license = "Apache 2.0",
+        //     ...
+        // ),
+        // OfflineModelInfo(
+        //     id      = "qwen3_1_7b_litertlm",
+        //     title   = "Qwen3 1.7B • ~1.7 ГБ",
+        //     format  = ModelFormat.LITERTLM,
+        //     license = "Apache 2.0",
+        //     ...
+        // ),
+        // OfflineModelInfo(
+        //     id      = "qwen3_4b_litertlm",
+        //     title   = "Qwen3 4B • ~4 ГБ (с режимом /think)",
+        //     format  = ModelFormat.LITERTLM,
+        //     license = "Apache 2.0",
+        //     ...
+        // ),
+        // ─────────────────────────────────────────────────────────────────────
     )
 
     /** Модель по умолчанию — оптимальный баланс для большинства устройств */
