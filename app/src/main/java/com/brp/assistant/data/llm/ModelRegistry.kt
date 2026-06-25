@@ -9,20 +9,18 @@ import kotlinx.serialization.Serializable
  *              Файлы: *.task
  *              API:   com.google.mediapipe:tasks-genai
  *
- *  LITERTLM  → LiteRT-LM Engine (Stage 2, в разработке)
+ *  LITERTLM  → LiteRT-LM Engine (Stage 2, реализован)
  *              Файлы: *.litertlm
  *              API:   com.google.ai.edge.litertlm:litertlm-android
  *              Даёт доступ к Qwen3, Gemma4, Phi-4-mini-litertlm и другим
  *              новым моделям с поддержкой NPU, Tool Use, мультимодальности.
- *
- * Роутинг по формату будет реализован в LlmInferenceEngine на Stage 2.
  */
 @Serializable
 enum class ModelFormat {
     /** .task — MediaPipe, текущий стабильный формат */
     TASK,
 
-    /** .litertlm — LiteRT-LM, новое поколение (Stage 2) */
+    /** .litertlm — LiteRT-LM, новое поколение */
     LITERTLM
 }
 
@@ -64,10 +62,7 @@ data class OfflineModelInfo(
  * ИСКЛЮЧЕНЫ модели семейства Gemma (Gemma license, gated):
  *   требуют логин на HuggingFace + принятие лицензии — неприемлемо для UX.
  *
- * Поддержка .litertlm моделей (Qwen3 и др.) будет добавлена на Stage 2
- * после реализации LiteRtLmEngine в LlmInferenceEngine.
- *
- * Диапазон устройств: от 135 МБ (2 ГБ RAM) до 3.9 ГБ (8 ГБ RAM).
+ * Диапазон устройств: от 135 МБ (2 ГБ RAM) до 5.7 ГБ (12 ГБ RAM).
  */
 object PublicOfflineModelCatalog {
 
@@ -109,6 +104,23 @@ object PublicOfflineModelCatalog {
             downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
+        // Qwen3 0.6B — LiteRT-LM, то же ценовое окно что и Qwen 2.5 0.5B,
+        // но новое поколение с поддержкой режима размышлений (/think)
+        // Источник: https://huggingface.co/litert-community/Qwen3-0.6B
+        OfflineModelInfo(
+            id           = "qwen3_0_6b_litertlm",
+            title        = "Qwen3 0.6B • 614 МБ ✨",
+            repoId       = "litert-community/Qwen3-0.6B",
+            filename     = "Qwen3-0.6B.litertlm",
+            license      = "Apache 2.0",
+            approxSizeMb = 614,
+            minRamGb     = 3,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.LITERTLM,
+            description  = "614 МБ. Qwen3 нового поколения (2025). Поддерживает режим размышлений: добавьте /think в запрос для пошагового анализа или /no_think для быстрого ответа. Требует 3 ГБ RAM.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.litertlm"
+        ),
+
         // ─────────────────────────────────────────────────────────────────────
         // УРОВЕНЬ 3: Mid-Range — флагманы 2021–2023, от 4 ГБ RAM
         // ─────────────────────────────────────────────────────────────────────
@@ -141,6 +153,22 @@ object PublicOfflineModelCatalog {
             downloadUrl  = "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
         ),
 
+        // Qwen3 1.7B — LiteRT-LM, конкурент DeepSeek R1 1.5B с нативным thinking
+        // Источник: https://huggingface.co/litert-community/Qwen3-1.7B
+        OfflineModelInfo(
+            id           = "qwen3_1_7b_litertlm",
+            title        = "Qwen3 1.7B • ~1.7 ГБ ✨",
+            repoId       = "litert-community/Qwen3-1.7B",
+            filename     = "Qwen3-1.7B.litertlm",
+            license      = "Apache 2.0",
+            approxSizeMb = 1740,
+            minRamGb     = 4,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.LITERTLM,
+            description  = "~1.7 ГБ. Qwen3 нового поколения с нативным режимом размышлений. Превосходит Qwen 2.5 1.5B по качеству рассуждений. Добавьте /think для глубокого анализа кодов ошибок BRP.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B.litertlm"
+        ),
+
         // ─────────────────────────────────────────────────────────────────────
         // УРОВЕНЬ 4: High-End — Snapdragon 8 Gen1+, от 6 ГБ RAM
         // ─────────────────────────────────────────────────────────────────────
@@ -171,33 +199,29 @@ object PublicOfflineModelCatalog {
             format       = ModelFormat.TASK,
             description  = "3.9 ГБ. Microsoft Phi-4-mini — флагманская офлайн-модель. Качество близко к облачным сервисам. Требует 8+ ГБ RAM (Galaxy S23+, Pixel 8 Pro).",
             downloadUrl  = "https://huggingface.co/litert-community/Phi-4-mini-instruct/resolve/main/Phi-4-mini-instruct_multi-prefill-seq_q8_ekv1280.task"
-        )
+        ),
 
         // ─────────────────────────────────────────────────────────────────────
-        // TODO Stage 2: добавить после реализации LiteRtLmEngine
-        //
-        // OfflineModelInfo(
-        //     id      = "qwen3_0_6b_litertlm",
-        //     title   = "Qwen3 0.6B • ~600 МБ",
-        //     format  = ModelFormat.LITERTLM,
-        //     license = "Apache 2.0",
-        //     ...
-        // ),
-        // OfflineModelInfo(
-        //     id      = "qwen3_1_7b_litertlm",
-        //     title   = "Qwen3 1.7B • ~1.7 ГБ",
-        //     format  = ModelFormat.LITERTLM,
-        //     license = "Apache 2.0",
-        //     ...
-        // ),
-        // OfflineModelInfo(
-        //     id      = "qwen3_4b_litertlm",
-        //     title   = "Qwen3 4B • ~4 ГБ (с режимом /think)",
-        //     format  = ModelFormat.LITERTLM,
-        //     license = "Apache 2.0",
-        //     ...
-        // ),
+        // УРОВЕНЬ 5: Ultra High-End — флагманы 2024–2025, от 12 ГБ RAM
         // ─────────────────────────────────────────────────────────────────────
+
+        // Qwen3 4B — channelwise int8 квантизация, 5.67 ГБ на диске
+        // Нативный /think — thinking-mode, Tool Use, MCP-совместимость
+        // Источник: https://huggingface.co/litert-community/Qwen3-4B
+        OfflineModelInfo(
+            id           = "qwen3_4b_litertlm",
+            title        = "Qwen3 4B • 5.7 ГБ 🔥",
+            repoId       = "litert-community/Qwen3-4B",
+            filename     = "qwen3_4b_channelwise_int8_float32kv.litertlm",
+            license      = "Apache 2.0",
+            approxSizeMb = 5810,
+            minRamGb     = 12,
+            promptStyle  = PromptStyle.CHATML,
+            format       = ModelFormat.LITERTLM,
+            description  = "5.7 ГБ. Qwen3 4B — мощнейшая офлайн-модель каталога. Channelwise int8 квантизация. Нативный режим размышлений (/think), Tool Use, контекст 32K. Только для топ-флагманов с 12+ ГБ RAM.",
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen3-4B/resolve/main/qwen3_4b_channelwise_int8_float32kv.litertlm"
+        )
+
     )
 
     /** Модель по умолчанию — оптимальный баланс для большинства устройств */
@@ -208,12 +232,21 @@ object PublicOfflineModelCatalog {
     /**
      * Автоматически рекомендует оптимальную модель по объёму RAM устройства.
      * Использование: ActivityManager.MemoryInfo().totalMem / 1_073_741_824L
+     *
+     * Стратегия выбора:
+     *   12+ ГБ → Qwen3 4B (LiteRT-LM, thinking mode, Tool Use)
+     *    8+ ГБ → Phi-4-mini (MediaPipe, стабильный, близко к GPT-уровню)
+     *    6+ ГБ → Qwen 2.5 3B (MediaPipe, высокое качество)
+     *    4+ ГБ → Qwen3 1.7B  (LiteRT-LM, новое поколение с /think)
+     *    3+ ГБ → Qwen3 0.6B  (LiteRT-LM, новое поколение, лёгкий)
+     *    <3 ГБ → SmolLM2 135M (работает везде)
      */
     fun recommendedForRam(totalRamGb: Int): OfflineModelInfo = when {
-        totalRamGb >= 8 -> models.first { it.id == "phi4_mini_task" }
-        totalRamGb >= 6 -> models.first { it.id == "qwen2_5_3b_task" }
-        totalRamGb >= 4 -> models.first { it.id == "qwen2_5_1_5b_task" }
-        totalRamGb >= 3 -> models.first { it.id == "qwen2_5_0_5b_task" }
-        else            -> models.first { it.id == "smollm2_135m_task" }
+        totalRamGb >= 12 -> models.first { it.id == "qwen3_4b_litertlm" }
+        totalRamGb >= 8  -> models.first { it.id == "phi4_mini_task" }
+        totalRamGb >= 6  -> models.first { it.id == "qwen2_5_3b_task" }
+        totalRamGb >= 4  -> models.first { it.id == "qwen3_1_7b_litertlm" }
+        totalRamGb >= 3  -> models.first { it.id == "qwen3_0_6b_litertlm" }
+        else             -> models.first { it.id == "smollm2_135m_task" }
     }
 }
