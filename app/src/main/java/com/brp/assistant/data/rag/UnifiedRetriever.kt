@@ -3,9 +3,9 @@ package com.brp.assistant.data.rag
 import com.brp.assistant.data.db.AccessoryDao
 import com.brp.assistant.data.db.KnowledgeDao
 import com.brp.assistant.data.db.ModelDao
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.domain.model.RetrievalMode
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -164,7 +164,8 @@ class UnifiedRetriever @Inject constructor(
         return query.lowercase()
             .replace(Regex("[^а-яёa-z0-9\\s]"), "")
             .split("\\s+".toRegex())
-            .filter { it.length > 2 && it !in stopWords }
+            // FIX: порог > 1 вместо > 2, чтобы BRP/ECU/RPM/CAN не отсеивались
+            .filter { it.length > 1 && it !in stopWords }
             .joinToString(" OR ")
     }
 }
