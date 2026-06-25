@@ -14,7 +14,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Simplified Local LLM engine using MediaPipe.
+ * Local LLM engine using MediaPipe LlmInference API.
+ *
+ * Требуемый формат модели: .task или .tflite (LiteRT/TFLite bundle).
+ * Файлы .gguf НЕ поддерживаются этим рантаймом и вызывают нативный краш:
+ *   "RET_CHECK failure ... modelError building tflite model"
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
@@ -27,6 +31,12 @@ class LlmInferenceEngine @Inject constructor(
         private const val DEFAULT_TEMP = 0.7f
         // FIX #9: базовый порог 10MB; реальный порог берётся из OfflineModelInfo.approxSizeMb
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
+
+        /**
+         * FIX (crash): поддерживаемые расширения файлов для MediaPipe LlmInference.
+         * .gguf, .bin и другие форматы вызывают нативный краш в LlmInference.createFromOptions().
+         */
+        private val SUPPORTED_EXTENSIONS = setOf("task", "tflite")
     }
 
     private var mediaPipeInference: LlmInference? = null
@@ -60,12 +70,40 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
+    /**
+     * Проверяет, является ли файл поддерживаемым форматом для MediaPipe Android.
+     * .gguf, .bin, .pt и прочие форматы НЕ поддерживаются.
+     */
+    private fun isSupportedModelFormat(file: File): Boolean {
+        val ext = file.extension.lowercase()
+        return ext in SUPPORTED_EXTENSIONS
+    }
+
     suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
             try {
                 closeInternal()
                 val modelFile = getModelFile(model)
-                if (!modelFile.exists()) return@withContext Result.failure(Exception("File not found"))
+
+                if (!modelFile.exists()) {
+                    return@withContext Result.failure(
+                        Exception("Файл модели не найден: ${modelFile.absolutePath}")
+                    )
+                }
+
+                // FIX (критический краш): проверяем формат ДО передачи в MediaPipe.
+                // Если файл .gguf или другого неподдерживаемого формата, нативный краш неизбежен.
+                if (!isSupportedModelFormat(modelFile)) {
+                    val ext = modelFile.extension
+                    Log.e(TAG, "Unsupported model format: .$ext (file: ${modelFile.name})")
+                    return@withContext Result.failure(
+                        Exception(
+                            "Неподдерживаемый формат модели: .${ext}\n" +
+                            "Android-движок (MediaPipe) поддерживает только .task и .tflite.\n" +
+                            "Удалите модель и скачайте заново."
+                        )
+                    )
+                }
 
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelFile.absolutePath)
@@ -108,9 +146,6 @@ class LlmInferenceEngine @Inject constructor(
 
     /**
      * FIX #5: destroy() отменяет CoroutineScope и освобождает все ресурсы.
-     * Вызывать при уничтожении компонента (например, в ViewModel.onCleared())
-     * или при смене модели, чтобы избежать утечки памяти через незавершённые
-     * корутины, держащие ссылку на context.
      */
     fun destroy() {
         scope.cancel()
@@ -155,7 +190,7 @@ class LlmInferenceEngine @Inject constructor(
         return PublicOfflineModelCatalog.models.filter { isModelDownloaded(it) }
     }
 
-    private suspend fun loadCustomModels(): List<OfflineModelInfo> = try {
+    private suspend fun loadCustomModels(): List<OfflineModelInfo>> = try {
         val json = settingsRepository.customModelsJson.first() ?: ""
         if (json.isNotEmpty())
             kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
