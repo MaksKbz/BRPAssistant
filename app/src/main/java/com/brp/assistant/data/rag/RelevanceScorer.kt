@@ -1,6 +1,7 @@
 package com.brp.assistant.data.rag
 
 import com.brp.assistant.data.db.enteties.Accessory
+import com.brp.assistant.data.db.enteties.BrpModel
 import com.brp.assistant.data.db.enteties.KnowledgeCard
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -8,7 +9,16 @@ import javax.inject.Singleton
 @Singleton
 class RelevanceScorer @Inject constructor() {
 
-    fun scoreKnowledgeCard(query: String, card: KnowledgeCard): Float {
+    /**
+     * FIX: added optional selectedModel parameter.
+     * Cards from the wrong modelFamily now receive a -30 penalty so they
+     * never outrank on-model cards even with strong symptom overlap.
+     */
+    fun scoreKnowledgeCard(
+        query: String,
+        card: KnowledgeCard,
+        selectedModel: BrpModel? = null
+    ): Float {
         val q = query.lowercase()
         var score = 0f
 
@@ -25,18 +35,45 @@ class RelevanceScorer @Inject constructor() {
         // 4. Full text keyword overlap
         score += keywordOverlap(query, card.fullText) * 5f
 
-        // 5. Node match (engine, cvt, cooling, etc.)
-        val nodes = listOf("двигатель", "cvt", "ремен", "4wd", "привод", "охлажд", "электр", "подвеск", "тормоз", "transmission", "ibr", "топлив")
+        // 5. Node match
+        val nodes = listOf(
+            "двигатель", "cvt", "ремен", "4wd", "привод", "охлажд",
+            "электр", "подвеск", "тормоз", "transmission", "ibr", "топлив"
+        )
         for (node in nodes) {
             if (q.contains(node) && card.node.lowercase().contains(node)) score += 20f
         }
 
-        // 6. Risk level boost (critical/high cards should surface first)
+        // 6. Risk level boost
         score += when (card.riskLevel) {
             "critical" -> 5f
-            "high" -> 3f
-            "medium" -> 1f
-            else -> 0f
+            "high"     -> 3f
+            "medium"   -> 1f
+            else       -> 0f
+        }
+
+        // FIX 7: Model-family relevance boost / penalty
+        if (selectedModel != null) {
+            val familyMatch = !card.modelFamily.isNullOrBlank() &&
+                card.modelFamily.equals(selectedModel.subcategory, ignoreCase = true)
+            val familyMismatch = !card.modelFamily.isNullOrBlank() &&
+                !card.modelFamily.equals(selectedModel.subcategory, ignoreCase = true)
+            val categoryMismatch = !card.equipmentType.equals(selectedModel.category, ignoreCase = true)
+
+            when {
+                familyMatch       -> score += 25f  // exact model family match — boost
+                familyMismatch    -> score -= 30f  // wrong model family — heavy penalty
+                categoryMismatch  -> score -= 20f  // wrong vehicle category — penalty
+            }
+
+            // Extra penalty if compatibleModels explicitly lists other models
+            // but NOT the selected one
+            if (!card.compatibleModels.isNullOrBlank() &&
+                !card.compatibleModels.contains(selectedModel.id, ignoreCase = true) &&
+                !card.compatibleModels.contains(selectedModel.subcategory ?: "", ignoreCase = true)
+            ) {
+                score -= 25f
+            }
         }
 
         return score
@@ -46,30 +83,26 @@ class RelevanceScorer @Inject constructor() {
         val q = query.lowercase()
         var score = 0f
 
-        // 1. Name match
         val nameLower = accessory.name.lowercase()
         if (nameLower.contains(q) || q.contains(nameLower)) score += 40f
-
-        // 2. Name keyword overlap
         score += keywordOverlap(query, accessory.name) * 15f
-
-        // 3. Description keyword overlap
         score += keywordOverlap(query, accessory.description) * 8f
-
-        // 4. Tags keyword overlap
         accessory.tags?.let { score += keywordOverlap(query, it) * 12f }
 
-        // 5. Category match
-        val cats = listOf("хранение", "защита", "комфорт", "свет", "аудио", "лебёд", "ветров", "бампер", "крыша", "двер", "storage", "protection", "comfort", "light", "audio", "winch", "windshield", "bumper", "roof", "door")
+        val cats = listOf(
+            "хранение", "защита", "комфорт", "свет", "аудио", "лебёд",
+            "ветров", "бампер", "крыша", "двер", "storage", "protection",
+            "comfort", "light", "audio", "winch", "windshield", "bumper", "roof", "door"
+        )
         for (cat in cats) {
-            if (q.contains(cat) && (accessory.category.lowercase().contains(cat) || accessory.subcategory?.lowercase()?.contains(cat) == true)) {
-                score += 20f
-            }
+            if (q.contains(cat) && (
+                    accessory.category.lowercase().contains(cat) ||
+                    accessory.subcategory?.lowercase()?.contains(cat) == true
+                )
+            ) score += 20f
         }
 
-        // 6. New 2026 boost
         if (accessory.isNew2026 == 1) score += 3f
-
         return score
     }
 

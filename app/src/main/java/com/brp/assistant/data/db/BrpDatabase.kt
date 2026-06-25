@@ -19,7 +19,6 @@ abstract class BrpDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
-    // FIX #3: добавлен отсутствующий FaultCodeDao
     abstract fun faultCodeDao(): FaultCodeDao
 }
 
@@ -126,12 +125,31 @@ interface KnowledgeDao {
     """)
     suspend fun searchFullText(query: String, limit: Int = 5): List<KnowledgeCard>
 
+    // OLD (kept for reference, replaced by getByBrandAndCategory below):
+    // getByBrandOrCategory used OR — returned ALL BRP cards regardless of model
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand OR equipmentType = :category
         ORDER BY riskLevel DESC
     """)
     suspend fun getByBrandOrCategory(brand: String, category: String): List<KnowledgeCard>
+
+    // FIX: strict AND — card must belong to BOTH brand AND equipmentType
+    @Query("""
+        SELECT * FROM knowledge_cards
+        WHERE brand = :brand AND equipmentType = :category
+        ORDER BY riskLevel DESC
+    """)
+    suspend fun getByBrandAndCategory(brand: String, category: String): List<KnowledgeCard>
+
+    // FIX: filter by modelFamily (maps to BrpModel.subcategory, e.g. "Renegade")
+    @Query("""
+        SELECT * FROM knowledge_cards
+        WHERE brand = :brand
+        AND (modelFamily = :modelFamily OR modelFamily IS NULL)
+        ORDER BY riskLevel DESC
+    """)
+    suspend fun getByModelFamily(brand: String, modelFamily: String): List<KnowledgeCard>
 
     @Query("SELECT * FROM knowledge_cards WHERE equipmentType = :type AND node = :node")
     suspend fun getByFilter(type: String, node: String): List<KnowledgeCard>
@@ -146,7 +164,6 @@ interface KnowledgeDao {
     suspend fun insertAll(cards: List<KnowledgeCard>)
 }
 
-// FIX #3: новый FaultCodeDao — теперь entity FaultCode доступна для чтения
 @Dao
 interface FaultCodeDao {
     @Query("SELECT * FROM fault_codes ORDER BY code")

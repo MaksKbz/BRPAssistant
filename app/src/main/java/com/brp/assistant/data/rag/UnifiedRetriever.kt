@@ -36,55 +36,74 @@ class UnifiedRetriever @Inject constructor(
 
         val keywords = extractKeywords(query)
 
-        // Knowledge cards
+        // Resolve selected model once
+        val selectedModel: BrpModel? = selectedModelId?.let { modelDao.getById(it) }
+
+        // ── Knowledge cards ──────────────────────────────────────────────────────
         val cards = when (mode) {
             RetrievalMode.DIAGNOSIS, RetrievalMode.BOTH -> {
-                val fts = if (keywords.isNotBlank()) {
-                    knowledgeDao.searchFullText(keywords, topK * 2)
-                } else emptyList()
-                
-                // Фильтрация по бренду и категории выбранной модели
-                val brandCards = selectedModelId?.let { mid ->
-                    modelDao.getById(mid)?.let { m ->
-                        knowledgeDao.getByBrandOrCategory(m.brand, m.category)
+
+                // 1. FTS search across all cards
+                val ftsRaw = if (keywords.isNotBlank())
+                    knowledgeDao.searchFullText(keywords, topK * 3)
+                else emptyList()
+
+                // 2. Strict model-scoped candidates
+                //    FIX: use AND (brand AND equipmentType) instead of OR
+                //    Priority: modelFamily match > brand+category > brand only
+                val scopedCards: List<KnowledgeCard> = if (selectedModel != null) {
+                    val byFamily = knowledgeDao.getByModelFamily(
+                        brand = selectedModel.brand,
+                        modelFamily = selectedModel.subcategory  // e.g. "Renegade"
+                    )
+                    val byBrandAndCat = knowledgeDao.getByBrandAndCategory(
+                        brand = selectedModel.brand,
+                        category = selectedModel.category
+                    )
+                    // Merge: family-specific first, then brand+category, deduplicate
+                    (byFamily + byBrandAndCat).distinctBy { it.id }
+                } else {
+                    // No model selected — return nothing from scoped pool;
+                    // rely entirely on FTS so we don't dump the whole DB
+                    emptyList()
+                }
+
+                // 3. Combine FTS + scoped, then apply strict model filter
+                val combined = (ftsRaw + scopedCards).distinctBy { it.id }
+
+                val filtered = if (selectedModel != null) {
+                    combined.filter { card ->
+                        isCardRelevantToModel(card, selectedModel)
                     }
-                } ?: knowledgeDao.getAll()
-                
-                (fts + brandCards)
-                    .distinctBy { it.id }
-                    .filter { card ->
-                        // Если модель выбрана, отдаем приоритет или жестко фильтруем
-                        selectedModelId?.let { mid ->
-                            val m = modelDao.getById(mid)
-                            m == null || card.brand.equals(m.brand, ignoreCase = true) || card.equipmentType.equals(m.category, ignoreCase = true)
-                        } ?: true
-                    }
-                    .map { ScoredCard(it, scorer.scoreKnowledgeCard(query, it)) }
+                } else {
+                    // No model context — only return FTS hits, limit scope
+                    ftsRaw.distinctBy { it.id }
+                }
+
+                filtered
+                    .map { ScoredCard(it, scorer.scoreKnowledgeCard(query, it, selectedModel)) }
                     .sortedByDescending { it.score }
                     .take(topK)
             }
             RetrievalMode.ACCESSORY -> emptyList()
         }
 
-        // Accessories
+        // ── Accessories ──────────────────────────────────────────────────────────
         val accessories = when (mode) {
             RetrievalMode.ACCESSORY, RetrievalMode.BOTH -> {
                 val byModel = selectedModelId?.let { accessoryDao.getForModel(it) } ?: emptyList()
                 val byQuery = if (keywords.isNotBlank()) accessoryDao.search(keywords, topK * 2) else emptyList()
-                val byPlatform = selectedModelId?.let { mid ->
-                    modelDao.getById(mid)?.platform?.let { plat ->
-                        accessoryDao.getByPlatform(plat)
-                    }
+                val byPlatform = selectedModel?.platform?.let { plat ->
+                    accessoryDao.getByPlatform(plat)
                 } ?: emptyList()
-                
+
                 (byModel + byQuery + byPlatform)
                     .distinctBy { it.id }
                     .filter { acc ->
-                        // Дополнительная проверка на совместимость если модель выбрана
-                        selectedModelId?.let { mid ->
-                            val m = modelDao.getById(mid)
-                            m == null || acc.brand.contains(m.brand, ignoreCase = true) || acc.compatiblePlatforms?.contains(m.platform ?: "", ignoreCase = true) == true
-                        } ?: true
+                        // FIX: require explicit model compatibility when model is selected
+                        if (selectedModel != null) {
+                            isAccessoryCompatible(acc, selectedModel)
+                        } else true
                     }
                     .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
                     .sortedByDescending { it.score }
@@ -93,10 +112,45 @@ class UnifiedRetriever @Inject constructor(
             RetrievalMode.DIAGNOSIS -> emptyList()
         }
 
-        // Models for selection mode
-        val modelResults = modelDao.search(query = if (keywords.isNotBlank()) keywords else null)
+        val modelResults = modelDao.search(
+            query = if (keywords.isNotBlank()) keywords else null
+        )
 
         return RetrievalResult(cards, accessories, modelResults)
+    }
+
+    /**
+     * FIX: strict relevance check for a knowledge card against the selected model.
+     * A card is relevant only if:
+     *   - brand matches exactly, AND
+     *   - equipmentType matches the model's category, AND
+     *   - modelFamily is null (generic) OR matches model's subcategory
+     */
+    private fun isCardRelevantToModel(card: KnowledgeCard, model: BrpModel): Boolean {
+        val brandMatch = card.brand.equals(model.brand, ignoreCase = true)
+        val categoryMatch = card.equipmentType.equals(model.category, ignoreCase = true)
+        val familyMatch = card.modelFamily.isNullOrBlank() ||
+            card.modelFamily.equals(model.subcategory, ignoreCase = true)
+        // compatibleModels JSON check: if card explicitly lists models and selected
+        // model is NOT in the list — exclude it
+        val compatibleModelsOk = card.compatibleModels.isNullOrBlank() ||
+            card.compatibleModels.contains(model.id, ignoreCase = true) ||
+            card.compatibleModels.contains(model.subcategory ?: "", ignoreCase = true)
+
+        return brandMatch && categoryMatch && familyMatch && compatibleModelsOk
+    }
+
+    /**
+     * FIX: accessory compatibility — must match model id OR platform.
+     * byModel join already guarantees compatibility, but byQuery/byPlatform
+     * results need explicit check.
+     */
+    private fun isAccessoryCompatible(acc: Accessory, model: BrpModel): Boolean {
+        val platformOk = !model.platform.isNullOrBlank() &&
+            acc.compatiblePlatforms?.contains(model.platform, ignoreCase = true) == true
+        val brandOk = acc.brand.contains(model.brand, ignoreCase = true)
+        val modelIdOk = acc.compatibleModels?.contains(model.id, ignoreCase = true) == true
+        return platformOk || modelIdOk || brandOk
     }
 
     private fun extractKeywords(query: String): String {
