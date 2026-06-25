@@ -49,6 +49,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
     // Мимикрия под браузер для обхода блокировок и корректной работы CDN
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+    // FIX #5: followRedirects=true — OkHttp сам следует за редиректами,
+    // поэтому ручная рекурсия в downloadFileInternalWithUrl была избыточной
+    // и опасной при LFS-цепочках редиректов.
     private val client: OkHttpClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
@@ -74,7 +77,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
         val tempFile = File(outFile.absolutePath + ".part")
 
-        // Проверка свободного места (если размер известен)
         val approxSize = if (model.approxSizeMb > 0) model.approxSizeMb else 1000
         val requiredBytes = (approxSize.toLong() * 1024 * 1024) + (200L * 1024 * 1024)
         if (!hasEnoughSpace(requiredBytes)) {
@@ -88,12 +90,11 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
 
         while (attempt < maxRetry && !success) {
             try {
-                // Пытаемся использовать разные зеркала при неудачах
                 val currentUrl = if (model.downloadUrl != null) {
                     model.downloadUrl
                 } else {
                     val encodedFileName = Uri.encode(model.filename)
-                    when(attempt) {
+                    when (attempt) {
                         0 -> "https://hf-mirror.com/${model.repoId}/resolve/main/${encodedFileName}?download=true"
                         1 -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
                         else -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
@@ -101,16 +102,13 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                 }
 
                 downloadFileInternalWithUrl(currentUrl, model, tempFile, outFile).collect { state ->
-                    if (state is ModelDownloadState.Success) {
-                        success = true
-                    }
+                    if (state is ModelDownloadState.Success) success = true
                     emit(state)
                 }
                 if (success) break
             } catch (e: Exception) {
                 attempt++
                 Log.e(TAG, "Attempt $attempt failed for ${model.id}: ${e.message}")
-                
                 if (attempt >= maxRetry) {
                     emit(ModelDownloadState.Error(model.id, "Ошибка загрузки: ${e.localizedMessage}. Проверьте соединение или попробуйте другую модель.", e))
                 } else {
@@ -120,6 +118,11 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
     }.flowOn(Dispatchers.IO)
 
+    /**
+     * FIX #5: удалён блок isRedirect + рекурсивный вызов самого себя.
+     * OkHttp уже следует за редиректами благодаря followRedirects=true.
+     * При цепочке LFS-редиректов рекурсия могла попасть в бесконечный стек.
+     */
     private fun downloadFileInternalWithUrl(
         url: String,
         model: OfflineModelInfo,
@@ -127,8 +130,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         outFile: File
     ): Flow<ModelDownloadState> = flow {
         var finalUrl = url
-        // Если это Hugging Face и нет параметра download=true, добавим его
-        if ((finalUrl.contains("huggingface.co") || finalUrl.contains("hf-mirror.com")) && !finalUrl.contains("download=true")) {
+        if ((finalUrl.contains("huggingface.co") || finalUrl.contains("hf-mirror.com"))
+            && !finalUrl.contains("download=true")
+        ) {
             finalUrl += if (finalUrl.contains("?")) "&download=true" else "?download=true"
         }
 
@@ -142,11 +146,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             .header("Accept", "*/*")
             .header("Connection", "keep-alive")
 
-        // Добавляем Referer только для оригинального HuggingFace
         if (finalUrl.contains("huggingface.co")) {
             requestBuilder.header("Referer", "https://huggingface.co/")
         }
-
         if (alreadyDownloaded > 0) {
             requestBuilder.header("Range", "bytes=$alreadyDownloaded-")
         }
@@ -158,33 +160,22 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             Log.e(TAG, "Network error: ${e.message}")
             throw IOException("Ошибка сети: ${e.localizedMessage}")
         }
-        
-        try {
-            // Если получили 301/302/307/308, переходим по Location вручную если OkHttp не справился
-            if (response.isRedirect) {
-                val newLocation = response.header("Location")
-                if (newLocation != null) {
-                    Log.d(TAG, "Manual redirect to: $newLocation")
-                    downloadFileInternalWithUrl(newLocation, model, tempFile, outFile).collect { emit(it) }
-                    return@flow
-                }
-            }
 
+        // FIX #5: блок isRedirect удалён.
+        // OkHttp с followRedirects=true никогда не доставит сюда isRedirect==true,
+        // поэтому рекурсия никогда не срабатывала, но всё равно увеличивала глубину стека.
+        try {
             if (!response.isSuccessful && response.code != 206) {
-                if (response.code == 403 || response.code == 401) {
-                    throw IOException("Доступ запрещен (${response.code}). HF требует авторизации для этой модели.")
+                when (response.code) {
+                    403, 401 -> throw IOException("Доступ запрещен (${response.code}). HF требует авторизации для этой модели.")
+                    416 -> { tempFile.delete(); throw IOException("416 Range Not Satisfiable") }
+                    else -> throw IOException("HTTP ${response.code}: ${response.message}")
                 }
-                if (response.code == 416) {
-                    tempFile.delete()
-                    throw IOException("416 Range Not Satisfiable")
-                }
-                throw IOException("HTTP ${response.code}: ${response.message}")
             }
 
             val contentType = response.header("Content-Type")
-            // HF часто отдает HTML страницу вместо файла, если ссылка "протухла" или требует логина
             if (contentType?.contains("text/html") == true && !model.isCustom) {
-                throw IOException("Сервер вернул страницу вместо файла.")
+                throw IOException("Сервер вернул HTML-страницу вместо файла.")
             }
 
             handleStream(model, response, tempFile, outFile, alreadyDownloaded).collect { emit(it) }
@@ -193,6 +184,11 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
     }
 
+    /**
+     * FIX #1: убран внешний tempFile.outputStream().use { }
+     * время открывавший второй поток на тот же файл, но не писавший данные.
+     * Теперь только один FileOutputStream с правильным append-флагом.
+     */
     private fun handleStream(
         model: OfflineModelInfo,
         response: Response,
@@ -204,18 +200,17 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         val append = code == 206
 
         if (!append && tempFile.exists()) {
-             // Если сервер вернул 200 вместо 206, значит дозакачка не поддерживается или невозможна
-             tempFile.delete()
+            // Сервер вернул 200 — дозакачка невозможна
+            tempFile.delete()
         }
 
         val body = response.body ?: throw IOException("Пустое тело ответа")
         val contentLength = body.contentLength()
         val totalBytes = if (contentLength >= 0) {
             if (append) alreadyDownloaded + contentLength else contentLength
-        } else {
-            null
-        }
+        } else null
 
+        // FIX #1: единственный поток записи — больше нет внешнего outputStream()
         FileOutputStream(tempFile, append).use { output ->
             body.byteStream().use { input ->
                 val buffer = ByteArray(1024 * 64)
@@ -241,7 +236,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             }
         }
 
-        // Завершение загрузки
         if (tempFile.exists()) {
             if (outFile.exists()) outFile.delete()
             if (!tempFile.renameTo(outFile)) {
@@ -266,6 +260,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
         val file = File(modelDir, model.filename)
-        return file.exists() && file.length() > 1024 * 1024 // Минимум 1 МБ
+        return file.exists() && file.length() > 1024 * 1024
     }
 }
