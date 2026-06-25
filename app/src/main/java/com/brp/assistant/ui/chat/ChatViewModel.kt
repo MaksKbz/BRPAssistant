@@ -39,13 +39,13 @@ class ChatViewModel @Inject constructor(
             combine(
                 llmEngine.activeModelId,
                 settingsRepository.geminiApiKey,
-                settingsRepository.grokApiKey,
+                settingsRepository.groqApiKey,  // FIX: was grokApiKey (compilation error)
                 settingsRepository.aiProvider
-            ) { modelId, geminiKey, grokKey, provider ->
+            ) { modelId, geminiKey, groqKey, provider ->
                 val hasApiKey = if (provider == "Gemini")
                     !geminiKey.isNullOrBlank()
                 else
-                    !grokKey.isNullOrBlank()
+                    !groqKey.isNullOrBlank()
                 val isReady = modelId != null || hasApiKey
                 android.util.Log.d(
                     "ChatViewModel",

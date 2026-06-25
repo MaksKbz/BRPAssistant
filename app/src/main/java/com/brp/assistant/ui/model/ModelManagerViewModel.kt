@@ -29,7 +29,7 @@ data class ModelManagerState(
     val downloadProgress: Float = 0f,
     val error: String? = null,
     val geminiApiKey: String? = null,
-    val grokApiKey: String? = null,
+    val groqApiKey: String? = null,  // FIX: was grokApiKey
     val aiProvider: String = "Gemini",
     val aiModelName: String = "gemini-1.5-flash",
     val aiSystemPrompt: String = "",
@@ -66,8 +66,8 @@ class ModelManagerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.grokApiKey.collect { key ->
-                _state.update { it.copy(grokApiKey = key) }
+            settingsRepository.groqApiKey.collect { key ->  // FIX: was grokApiKey
+                _state.update { it.copy(groqApiKey = key) }  // FIX: was grokApiKey
             }
         }
         viewModelScope.launch {
@@ -180,7 +180,7 @@ class ModelManagerViewModel @Inject constructor(
             val result = remoteLlm.validateKey(_state.value.aiProvider, trimmedKey, _state.value.aiModelName)
             if (result.isSuccess) {
                 if (_state.value.aiProvider == "Gemini") settingsRepository.setGeminiApiKey(trimmedKey)
-                else settingsRepository.setGrokApiKey(trimmedKey)
+                else settingsRepository.setGroqApiKey(trimmedKey)  // FIX: was setGrokApiKey
                 _state.update { it.copy(isValidating = false, validationResult = "SUCCESS") }
             } else {
                 _state.update { it.copy(isValidating = false, validationResult = result.exceptionOrNull()?.message ?: "ERROR") }

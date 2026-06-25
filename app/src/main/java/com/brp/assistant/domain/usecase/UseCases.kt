@@ -33,7 +33,7 @@ class DiagnoseUseCase @Inject constructor(
             val apiKey = if (provider == "Gemini")
                 settingsRepository.geminiApiKey.first()
             else
-                settingsRepository.grokApiKey.first()
+                settingsRepository.groqApiKey.first()  // FIX: was grokApiKey (compilation error)
             val useRemote = !apiKey.isNullOrBlank()
 
             val brpModel = vehicleId?.let { modelRepository.getById(it) }
@@ -102,7 +102,7 @@ class ChatUseCase @Inject constructor(
         val apiKey = if (provider == "Gemini")
             settingsRepository.geminiApiKey.first()
         else
-            settingsRepository.grokApiKey.first()
+            settingsRepository.groqApiKey.first()  // FIX: was grokApiKey (compilation error)
         val useRemote = !apiKey.isNullOrBlank()
 
         val retrieval = retriever.retrieve(message, mode, vehicleId)
