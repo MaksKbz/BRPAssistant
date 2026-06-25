@@ -2,9 +2,10 @@ package com.brp.assistant.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.brp.assistant.data.db.BrpDatabase
-import com.brp.assistant.data.llm.LlmInferenceEngine
+import com.brp.assistant.data.db.FaultCodeDao
 import com.brp.assistant.data.llm.PromptBuilder
 import dagger.Module
 import dagger.Provides
@@ -33,11 +34,15 @@ object AppModule {
     @Provides fun provideModelDao(db: BrpDatabase) = db.modelDao()
     @Provides fun provideAccessoryDao(db: BrpDatabase) = db.accessoryDao()
     @Provides fun provideKnowledgeDao(db: BrpDatabase) = db.knowledgeDao()
+    // FIX #3: добавлен провайдер для нового FaultCodeDao
+    @Provides fun provideFaultCodeDao(db: BrpDatabase): FaultCodeDao = db.faultCodeDao()
 
     @Provides
     @Singleton
     fun providePromptBuilder(): PromptBuilder = PromptBuilder()
 
+    // FIX #2: WorkManager инициализируется через Hilt Configuration
+    // чтобы @HiltWorker аннотированные Worker-классы корректно инжектировались
     @Provides
     @Singleton
     fun provideWorkManager(@ApplicationContext context: Context): WorkManager {

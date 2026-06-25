@@ -22,7 +22,9 @@ class SettingsRepository @Inject constructor(
     private val SELECTED_VEHICLE_ID = stringPreferencesKey("selected_vehicle_id")
     private val CUSTOM_MODELS_JSON = stringPreferencesKey("custom_models_json")
     private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
-    private val GROK_API_KEY = stringPreferencesKey("grok_api_key")
+    // FIX #4: ключ хранилища остаётся "grok_api_key" для обратной совместимости,
+    // но свойство переименовано в groqApiKey
+    private val GROQ_API_KEY = stringPreferencesKey("grok_api_key")
     private val AI_PROVIDER = stringPreferencesKey("ai_provider")
     private val AI_MODEL_NAME = stringPreferencesKey("ai_model_name")
     private val AI_SYSTEM_PROMPT = stringPreferencesKey("ai_system_prompt")
@@ -46,9 +48,10 @@ class SettingsRepository @Inject constructor(
         preferences[GEMINI_API_KEY]
     }
 
+    // FIX #4: переименовано grokApiKey → groqApiKey (Groq — inference сервис, не Grok от X)
     // NOTE: No default key here. User must enter their own Groq API key in Settings.
-    val grokApiKey: Flow<String?> = context.dataStore.data.map { preferences ->
-        preferences[GROK_API_KEY]
+    val groqApiKey: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[GROQ_API_KEY]
     }
 
     val aiProvider: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -85,12 +88,13 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    suspend fun setGrokApiKey(key: String?) {
+    // FIX #4: переименовано setGrokApiKey → setGroqApiKey
+    suspend fun setGroqApiKey(key: String?) {
         context.dataStore.edit { preferences ->
             if (key != null) {
-                preferences[GROK_API_KEY] = key
+                preferences[GROQ_API_KEY] = key
             } else {
-                preferences.remove(GROK_API_KEY)
+                preferences.remove(GROQ_API_KEY)
             }
         }
     }

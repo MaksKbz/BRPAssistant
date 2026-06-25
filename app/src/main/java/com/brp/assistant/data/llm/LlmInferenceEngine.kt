@@ -18,14 +18,16 @@ import javax.inject.Singleton
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
-    @param:ApplicationContext private val context: Context,
+    // FIX #7: @param:ApplicationContext → @ApplicationContext (стандартный Hilt стиль)
+    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository
 ) {
     companion object {
         private const val TAG = "LlmInferenceEngine"
         private const val MAX_TOKENS = 1024
         private const val DEFAULT_TEMP = 0.7f
-        private const val MIN_FILE_SIZE_BYTES = 50L * 1024 * 1024 
+        // FIX #9: базовый порог 10MB; реальный порог берётся из OfflineModelInfo.approxSizeMb
+        private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
     }
 
     private var mediaPipeInference: LlmInference? = null
@@ -36,7 +38,11 @@ class LlmInferenceEngine @Inject constructor(
     val activeModelId: StateFlow<String?> = _activeModelId.asStateFlow()
 
     private var activeModelInfo: OfflineModelInfo? = null
-    private var isInitialized = false
+
+    // FIX #5: _isInitialized — StateFlow вместо var, чтобы избежать race condition:
+    // UI/другие корутины могут наблюдать за готовностью вместо polling isReady()
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitializedFlow: StateFlow<Boolean> = _isInitialized.asStateFlow()
 
     init {
         scope.launch {
@@ -63,15 +69,17 @@ class LlmInferenceEngine @Inject constructor(
                     .setMaxTokens(MAX_TOKENS)
                     .setTemperature(DEFAULT_TEMP)
                     .build()
-                
+
                 mediaPipeInference = LlmInference.createFromOptions(context, options)
                 activeModelInfo = model
-                isInitialized = true
+                // FIX #5: _isInitialized.value устанавливается атомарно вместе с _activeModelId
+                _isInitialized.value = true
                 _activeModelId.value = model.id
                 settingsRepository.setActiveModelId(model.id)
                 Result.success(Unit)
             } catch (e: Throwable) {
                 Log.e(TAG, "Init failed", e)
+                _isInitialized.value = false
                 Result.failure(e)
             }
         }
@@ -90,7 +98,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    fun isReady(): Boolean = isInitialized && mediaPipeInference != null
+    fun isReady(): Boolean = _isInitialized.value && mediaPipeInference != null
     fun getActiveModelId(): String? = activeModelInfo?.id
     fun getActivePromptStyle(): PromptStyle = activeModelInfo?.promptStyle ?: PromptStyle.CHATML
 
@@ -99,7 +107,7 @@ class LlmInferenceEngine @Inject constructor(
     private fun closeInternal() {
         try { mediaPipeInference?.close() } catch (e: Throwable) {}
         mediaPipeInference = null
-        isInitialized = false
+        _isInitialized.value = false
         activeModelInfo = null
         _activeModelId.value = null
     }
@@ -110,9 +118,14 @@ class LlmInferenceEngine @Inject constructor(
         return File(modelDir, model.filename)
     }
 
+    // FIX #9: минимальный размер = 80% от approxSizeMb модели, но не менее FALLBACK_MIN_FILE_SIZE_BYTES
     fun isModelDownloaded(model: OfflineModelInfo): Boolean {
         val file = getModelFile(model)
-        return file.exists() && file.length() >= MIN_FILE_SIZE_BYTES
+        val minSizeBytes = maxOf(
+            FALLBACK_MIN_FILE_SIZE_BYTES,
+            (model.approxSizeMb * 1024L * 1024L * 0.8).toLong()
+        )
+        return file.exists() && file.length() >= minSizeBytes
     }
 
     suspend fun deleteModel(model: OfflineModelInfo): Boolean = mutex.withLock {

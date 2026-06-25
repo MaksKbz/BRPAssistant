@@ -1,7 +1,7 @@
 package com.brp.assistant.data.db
 
 import androidx.room.*
-import com.brp.assistant.data.db.enteties.*
+import com.brp.assistant.data.db.entities.*
 
 @Database(
     entities = [
@@ -19,6 +19,8 @@ abstract class BrpDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
+    // FIX #3: добавлен отсутствующий FaultCodeDao
+    abstract fun faultCodeDao(): FaultCodeDao
 }
 
 @Dao
@@ -142,4 +144,29 @@ interface KnowledgeDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(cards: List<KnowledgeCard>)
+}
+
+// FIX #3: новый FaultCodeDao — теперь entity FaultCode доступна для чтения
+@Dao
+interface FaultCodeDao {
+    @Query("SELECT * FROM fault_codes ORDER BY code")
+    suspend fun getAll(): List<FaultCode>
+
+    @Query("SELECT * FROM fault_codes WHERE code = :code")
+    suspend fun getByCode(code: String): FaultCode?
+
+    @Query("SELECT * FROM fault_codes WHERE brand = :brand ORDER BY code")
+    suspend fun getByBrand(brand: String): List<FaultCode>
+
+    @Query("""
+        SELECT * FROM fault_codes
+        WHERE code LIKE '%' || :query || '%'
+        OR description LIKE '%' || :query || '%'
+        ORDER BY code
+        LIMIT :limit
+    """)
+    suspend fun search(query: String, limit: Int = 20): List<FaultCode>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(codes: List<FaultCode>)
 }

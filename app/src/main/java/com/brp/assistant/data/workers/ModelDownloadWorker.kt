@@ -2,18 +2,23 @@ package com.brp.assistant.data.workers
 
 import android.content.Context
 import android.util.Log
+import androidx.hilt.work.HiltWorker
 import androidx.work.*
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class ModelDownloadWorker(
-    context: Context,
-    params: WorkerParameters
+@HiltWorker
+class ModelDownloadWorker @AssistedInject constructor(
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
     private val client = OkHttpClient.Builder()
@@ -30,7 +35,7 @@ class ModelDownloadWorker(
 
         val outputDir = File(applicationContext.filesDir, MODEL_DIR)
         if (!outputDir.exists()) outputDir.mkdirs()
-        
+
         val outputFile = File(outputDir, fileName)
         val tempFile = File(outputDir, "$fileName.part")
 
@@ -94,7 +99,7 @@ class ModelDownloadWorker(
     private suspend fun performDownload(url: String, tempFile: File) {
         if (tempFile.exists() && tempFile.length() < 1024) tempFile.delete()
         val alreadyDownloaded = if (tempFile.exists()) tempFile.length() else 0L
-        
+
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", commonUserAgent)
@@ -121,35 +126,32 @@ class ModelDownloadWorker(
 
             val body = response.body ?: throw IOException("Empty body")
             val total = if (response.code == 206) alreadyDownloaded + body.contentLength() else body.contentLength()
+            val appendMode = response.code == 206
 
-            tempFile.outputStream().use { output ->
-                if (response.code == 206) {
-                    // FileOutputStream with append=true handles this
-                }
-                val os = if (response.code == 206) java.io.FileOutputStream(tempFile, true) else java.io.FileOutputStream(tempFile, false)
-                
-                os.use { outputStream ->
-                    body.byteStream().use { input ->
-                        val buffer = ByteArray(128 * 1024)
-                        var downloaded = if (response.code == 206) alreadyDownloaded else 0L
-                        var read: Int
-                        var lastUpdate = 0L
+            // FIX #1: единственный поток записи — больше нет двойного FileOutputStream
+            FileOutputStream(tempFile, appendMode).use { outputStream ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(128 * 1024)
+                    var downloaded = if (appendMode) alreadyDownloaded else 0L
+                    var read: Int
+                    var lastUpdate = 0L
 
-                        while (input.read(buffer).also { read = it } != -1) {
-                            if (isStopped) throw IOException("Canceled")
-                            outputStream.write(buffer, 0, read)
-                            downloaded += read
+                    while (input.read(buffer).also { read = it } != -1) {
+                        if (isStopped) throw IOException("Canceled")
+                        outputStream.write(buffer, 0, read)
+                        downloaded += read
 
-                            val now = System.currentTimeMillis()
-                            if (now - lastUpdate > 1000) {
-                                val progress = if (total > 0) downloaded.toFloat() / total else -1f
-                                setProgress(Data.Builder()
+                        val now = System.currentTimeMillis()
+                        if (now - lastUpdate > 1000) {
+                            val progress = if (total > 0) downloaded.toFloat() / total else -1f
+                            setProgress(
+                                Data.Builder()
                                     .putFloat(KEY_PROGRESS, progress)
                                     .putLong(KEY_DOWNLOADED, downloaded)
                                     .putLong(KEY_SIZE, total)
-                                    .build())
-                                lastUpdate = now
-                            }
+                                    .build()
+                            )
+                            lastUpdate = now
                         }
                     }
                 }

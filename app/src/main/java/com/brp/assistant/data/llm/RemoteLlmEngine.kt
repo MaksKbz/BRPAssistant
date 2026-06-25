@@ -45,7 +45,6 @@ class RemoteLlmEngine @Inject constructor(
                     Result.failure(e)
                 }
             } else {
-                // FIX #3: use a valid Groq model name for validation
                 val testModel = if (modelName.contains("llama") || modelName.contains("mixtral"))
                     modelName
                 else
@@ -90,7 +89,6 @@ class RemoteLlmEngine @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
-        // FIX #3: default Groq model is llama-3.3-70b-versatile, NOT "grok-beta"
         val modelName = settingsRepository.aiModelName.first()
             ?: if (provider == "Gemini") "gemini-1.5-flash" else "llama-3.3-70b-versatile"
         val systemPrompt = settingsRepository.aiSystemPrompt.first()
@@ -113,7 +111,6 @@ class RemoteLlmEngine @Inject constructor(
         val apiKey = settingsRepository.geminiApiKey.first()
         if (apiKey.isNullOrBlank()) return Result.failure(Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер."))
 
-        // For new models (2.0+) and Lite always use v1beta
         val attempts = if (modelName.contains("2.0") || modelName.contains("lite")) {
             listOf("v1beta")
         } else {
@@ -124,11 +121,11 @@ class RemoteLlmEngine @Inject constructor(
 
         for (apiVersion in attempts) {
             try {
-                val url = "https://generativelanguage.googleapis.com/$apiVersion/models/$modelName:generateContent?key=$apiKey"
+                // FIX #10: убран ?key=$apiKey из URL — ключ передаётся только через заголовок
+                // (передача ключа в URL попадает в логи серверов и прокси)
+                val url = "https://generativelanguage.googleapis.com/$apiVersion/models/$modelName:generateContent"
 
-                // FIX #2: use system_instruction field instead of string concatenation
                 val jsonBody = JSONObject().apply {
-                    // system_instruction is supported in v1beta
                     if (systemPrompt.isNotBlank()) {
                         put("system_instruction", JSONObject().apply {
                             put("parts", JSONArray().apply {
@@ -152,6 +149,7 @@ class RemoteLlmEngine @Inject constructor(
 
                 val request = Request.Builder()
                     .url(url)
+                    // FIX #10: только заголовок, без дублирования ключа в URL
                     .addHeader("x-goog-api-key", apiKey)
                     .post(jsonBody.toString().toRequestBody(jsonMediaType))
                     .build()
@@ -190,7 +188,6 @@ class RemoteLlmEngine @Inject constructor(
         return Result.failure(lastError ?: Exception("Не удалось подключиться к Gemini"))
     }
 
-    // FIX #3: renamed from generateGrokRawHttp — Groq, not Grok
     private suspend fun generateGroqRawHttp(
         prompt: String,
         modelName: String,
@@ -198,7 +195,8 @@ class RemoteLlmEngine @Inject constructor(
         temperature: Float,
         onPartial: (String) -> Unit
     ): Result<String> {
-        val apiKey = settingsRepository.grokApiKey.first()
+        // FIX #4: groqApiKey (переименовано с grokApiKey)
+        val apiKey = settingsRepository.groqApiKey.first()
         if (apiKey.isNullOrBlank()) return Result.failure(Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер."))
 
         return try {
