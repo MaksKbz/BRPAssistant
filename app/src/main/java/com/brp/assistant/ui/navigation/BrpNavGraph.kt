@@ -60,7 +60,8 @@ fun BrpNavGraph(
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val showBottomBar = currentRoute in bottomScreens.map { it.route } || currentRoute?.startsWith("chat/") == true
+    val showBottomBar = currentRoute in bottomScreens.map { it.route } ||
+            currentRoute?.startsWith("chat/") == true
 
     val selectedVehicleId by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
     val selectedVehicleName by mainViewModel.selectedVehicleName.collectAsStateWithLifecycle()
@@ -165,7 +166,11 @@ fun BrpNavGraph(
                 Screen.Chat.route,
                 arguments = listOf(
                     navArgument("mode") { type = NavType.StringType; defaultValue = "both" },
-                    navArgument("q") { type = NavType.StringType; nullable = true; defaultValue = null }
+                    navArgument("q") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
                 )
             ) { backStackEntry ->
                 val mode = backStackEntry.arguments?.getString("mode") ?: "both"
@@ -175,7 +180,12 @@ fun BrpNavGraph(
                 }
                 val chatVm: ChatViewModel = hiltViewModel()
                 val state by chatVm.state.collectAsStateWithLifecycle()
-                
+
+                // Очищаем контекст чата при смене техники или режима
+                LaunchedEffect(selectedVehicleId, mode) {
+                    chatVm.clearForChat(selectedVehicleId, mode)
+                }
+
                 LaunchedEffect(initialQuery) {
                     if (initialQuery != null && state.messages.isEmpty()) {
                         chatVm.sendMessage(initialQuery, mode, selectedVehicleId)
@@ -183,7 +193,7 @@ fun BrpNavGraph(
                 }
 
                 ChatScreen(
-                    title = when(mode) {
+                    title = when (mode) {
                         "diagnosis" -> "Диагностика"
                         "accessory" -> "Подбор аксессуаров"
                         else -> "Чат"
@@ -194,6 +204,14 @@ fun BrpNavGraph(
                     isGenerating = state.isGenerating,
                     isModelReady = state.isModelReady,
                     selectedVehicleName = selectedVehicleName,
+                    availableOfflineModels = state.availableOfflineModels,
+                    activeOfflineModelId = state.activeOfflineModelId,
+                    currentOnlineProvider = state.currentOnlineProvider,
+                    selectedLlmModelId = state.selectedLlmModelId,
+                    selectedOnlineProvider = state.selectedOnlineProvider,
+                    onSelectOfflineLlm = { chatVm.selectOfflineLlm(it) },
+                    onSelectOnlineLlm = { chatVm.selectOnlineLlm(it) },
+                    onResetLlm = { chatVm.resetLlmSelection() },
                     onSend = { msg -> chatVm.sendMessage(msg, mode, selectedVehicleId) },
                     onNavigate = { route -> navController.navigate(route) },
                     onBack = { navController.popBackStack() }
@@ -219,8 +237,8 @@ fun BrpNavGraph(
                         "Рвётся ремень (Ski-Doo/Lynx)",
                         "Проблемы с DCT (Maverick R)"
                     ),
-                    onSend = { text -> 
-                        navController.navigate(Screen.Chat.createRoute("diagnosis", text)) 
+                    onSend = { text ->
+                        navController.navigate(Screen.Chat.createRoute("diagnosis", text))
                     },
                     onSelectVehicle = { navController.navigate(Screen.VehicleSelect.route) },
                     onGoToSituations = { navController.navigate(Screen.Situations.route) },
@@ -236,13 +254,18 @@ fun BrpNavGraph(
                     messages = state.messages,
                     isGenerating = state.isGenerating,
                     isModelReady = state.isModelReady,
-                    popularCategories = listOf("Хранение LinQ", "Защита", "Комфорт", "Освещение", "Аудио", "Лебёдки", "Ветровые стёкла", "Крыши/Кабины"),
+                    popularCategories = listOf(
+                        "Хранение LinQ", "Защита", "Комфорт", "Освещение",
+                        "Аудио", "Лебёдки", "Ветровые стёкла", "Крыши/Кабины"
+                    ),
                     suggestedAccessories = emptyList(),
-                    onSend = { text -> 
-                        navController.navigate(Screen.Chat.createRoute("accessory", text)) 
+                    onSend = { text ->
+                        navController.navigate(Screen.Chat.createRoute("accessory", text))
                     },
-                    onCategorySelect = { cat -> 
-                        navController.navigate(Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat")) 
+                    onCategorySelect = { cat ->
+                        navController.navigate(
+                            Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat")
+                        )
                     },
                     onSelectVehicle = { navController.navigate(Screen.VehicleSelect.route) },
                     onNavigate = { route -> navController.navigate(route) },
@@ -255,9 +278,7 @@ fun BrpNavGraph(
                 ModelManagerScreen(
                     state = state,
                     onDownload = { modelVm.downloadModel(it) },
-                    onActivate = { 
-                        modelVm.activateModel(it)
-                    },
+                    onActivate = { modelVm.activateModel(it) },
                     onDelete = { modelVm.deleteModel(it) },
                     onAddFromFile = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
                     onAddFromUrl = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
