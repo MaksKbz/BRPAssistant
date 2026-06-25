@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BRP Assistant</string>
+    <string name="home_title">BRP Assistant 2026</string>
+    <string name="home_subtitle">Ваш оффлайн-эксперт по технике BRP</string>
+    <string name="home_brands">Can-Am · Ski-Doo · Sea-Doo · Lynx</string>
+    
+    <string name="nav_home">Главная</string>
+    <string name="nav_diagnose">Диагностика</string>
+    <string name="nav_accessory">Аксессуары</string>
+    <string name="nav_vehicle">Техника</string>
+    
+    <string name="diagnose_title">Диагностика</string>
+    <string name="diagnose_hint">Опишите проблему с техникой…</string>
+    
+    <string name="accessory_title">Аксессуары</string>
+    <string name="accessory_hint">Что вы ищете для своей техники?</string>
+    
+    <string name="vehicle_title">Выберите технику</string>
+    <string name="vehicle_brand">Бренд</string>
+    <string name="vehicle_category">Тип</string>
+    <string name="vehicle_model">Модель</string>
+    
+    <string name="model_manager_title">Управление моделями ИИ</string>
+    <string name="model_download">Скачать</string>
+    <string name="model_activate">Активировать</string>
+    <string name="model_delete">Удалить</string>
+    <string name="model_downloading">Скачивание…</string>
+    <string name="model_ready">Готово</string>
+    <string name="model_active">Активна</string>
+    
+    <string name="chat_hint">Задайте вопрос…</string>
+    <string name="chat_send">Отправить</string>
+    
+    <string name="safety_warning">⚠️ Внимание: высокая степень риска</string>
+    <string name="evacuation_warning">🚨 Требуется эвакуация!</string>
+    
+    <string name="error_no_model">Сначала скачайте и выберите модель ИИ</string>
+    <string name="error_no_vehicle">Сначала выберите вашу технику</string>
+    
+    <string name="format_gb">%1$.1f ГБ</string>
+    <string name="format_mb">%1$.0f МБ</string>
+    <string name="format_price">$%1$,.0f</string>
+    <string name="format_hp">%1$d л.с.</string>
+</resources>
