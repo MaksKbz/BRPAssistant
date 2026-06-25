@@ -40,6 +40,14 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon
 
+      - name: Find APK
+        id: find_apk
+        run: |
+          APK_PATH=$(find . -name "*.apk" -path "*/debug/*" | head -1)
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_PATH"
+          ls -lh "$APK_PATH"
+
       - name: Get version name
         id: version
         run: |
@@ -48,15 +56,20 @@ jobs:
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Rename APK
+        id: rename
         run: |
-          mv app/build/outputs/apk/debug/app-debug.apk \
-             app/build/outputs/apk/debug/BRPAssistant-v${{ steps.version.outputs.VERSION_NAME }}-${{ steps.version.outputs.SHORT_SHA }}-debug.apk
+          SRC="${{ steps.find_apk.outputs.APK_PATH }}"
+          DIR=$(dirname "$SRC")
+          DEST="$DIR/BRPAssistant-v${{ steps.version.outputs.VERSION_NAME }}-${{ steps.version.outputs.SHORT_SHA }}-debug.apk"
+          mv "$SRC" "$DEST"
+          echo "FINAL_APK=$DEST" >> $GITHUB_OUTPUT
+          echo "Renamed to: $DEST"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: BRPAssistant-v${{ steps.version.outputs.VERSION_NAME }}-${{ steps.version.outputs.SHORT_SHA }}-debug
-          path: app/build/outputs/apk/debug/BRPAssistant-v${{ steps.version.outputs.VERSION_NAME }}-${{ steps.version.outputs.SHORT_SHA }}-debug.apk
+          path: ${{ steps.rename.outputs.FINAL_APK }}
           retention-days: 7
 
       - name: Post build summary
