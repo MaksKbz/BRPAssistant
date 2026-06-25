@@ -104,9 +104,9 @@ object PublicOfflineModelCatalog {
             downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
-        // Qwen3 0.6B — LiteRT-LM, то же ценовое окно что и Qwen 2.5 0.5B,
-        // но новое поколение с поддержкой режима размышлений (/think)
+        // Qwen3 0.6B — LiteRT-LM
         // Источник: https://huggingface.co/litert-community/Qwen3-0.6B
+        // Имя файла подтверждено через HF API: Qwen3-0.6B.litertlm
         OfflineModelInfo(
             id           = "qwen3_0_6b_litertlm",
             title        = "Qwen3 0.6B • 614 МБ ✨",
@@ -153,20 +153,21 @@ object PublicOfflineModelCatalog {
             downloadUrl  = "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
         ),
 
-        // Qwen3 1.7B — LiteRT-LM, конкурент DeepSeek R1 1.5B с нативным thinking
+        // Qwen3 1.7B — LiteRT-LM
         // Источник: https://huggingface.co/litert-community/Qwen3-1.7B
+        // Имя файла подтверждено через HF API: Qwen3_1.7B.litertlm (подчёркивание!)
         OfflineModelInfo(
             id           = "qwen3_1_7b_litertlm",
             title        = "Qwen3 1.7B • ~1.7 ГБ ✨",
             repoId       = "litert-community/Qwen3-1.7B",
-            filename     = "Qwen3-1.7B.litertlm",
+            filename     = "Qwen3_1.7B.litertlm",
             license      = "Apache 2.0",
             approxSizeMb = 1740,
             minRamGb     = 4,
             promptStyle  = PromptStyle.CHATML,
             format       = ModelFormat.LITERTLM,
             description  = "~1.7 ГБ. Qwen3 нового поколения с нативным режимом размышлений. Превосходит Qwen 2.5 1.5B по качеству рассуждений. Добавьте /think для глубокого анализа кодов ошибок BRP.",
-            downloadUrl  = "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B.litertlm"
+            downloadUrl  = "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3_1.7B.litertlm"
         ),
 
         // ─────────────────────────────────────────────────────────────────────
@@ -208,6 +209,7 @@ object PublicOfflineModelCatalog {
         // Qwen3 4B — channelwise int8 квантизация, 5.67 ГБ на диске
         // Нативный /think — thinking-mode, Tool Use, MCP-совместимость
         // Источник: https://huggingface.co/litert-community/Qwen3-4B
+        // Имя файла подтверждено через HF API: qwen3_4b_channelwise_int8_float32kv.litertlm
         OfflineModelInfo(
             id           = "qwen3_4b_litertlm",
             title        = "Qwen3 4B • 5.7 ГБ 🔥",
