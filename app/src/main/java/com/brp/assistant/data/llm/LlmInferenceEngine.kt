@@ -47,7 +47,7 @@ class LlmInferenceEngine @Inject constructor(
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
     }
 
-    // ── MediaPipe движок (TASK) ───────────────────────────────────────────────
+    // ── MediaPipe движок (TASK) ──────────────────────────────────────────────
     private var mediaPipeInference: LlmInference? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -74,7 +74,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Инициализация ─────────────────────────────────────────────────────────
+    // ── Инициализация ───────────────────────────────────────────────────
 
     suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -98,7 +98,7 @@ class LlmInferenceEngine @Inject constructor(
                     )
                 }
 
-                // ── Роутинг по формату ────────────────────────────────────────
+                // ── Роутинг по формату ─────────────────────────────────
                 val result = when (model.format) {
                     ModelFormat.LITERTLM -> {
                         Log.i(TAG, "Routing to LiteRtLmEngine: ${model.title}")
@@ -143,7 +143,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Генерация ответа ──────────────────────────────────────────────────────
+    // ── Генерация ответа ────────────────────────────────────────────────
 
     /**
      * Генерирует ответ, прозрачно делегируя активному движку.
@@ -175,7 +175,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Состояние ─────────────────────────────────────────────────────────────
+    // ── Состояние ───────────────────────────────────────────────────────────
 
     fun isReady(): Boolean {
         return _isInitialized.value && when (activeModelInfo?.format) {
@@ -189,13 +189,22 @@ class LlmInferenceEngine @Inject constructor(
     fun getActivePromptStyle(): PromptStyle =
         activeModelInfo?.promptStyle ?: PromptStyle.CHATML
 
-    // ── Жизненный цикл ────────────────────────────────────────────────────────
+    // ── Жизненный цикл ──────────────────────────────────────────────────
 
     suspend fun close() = mutex.withLock { closeInternal() }
 
+    /**
+     * FIX #3: раньше destroy() вызывал closeInternal() напрямую, без mutex,
+     * что приводило к race condition если одновременно выполнялся initialize().
+     * Теперь: scope.cancel() прекращает все корутины, затем
+     * runBlocking блокирует поток владельца до получения mutex.
+     */
     fun destroy() {
         scope.cancel()
-        closeInternal()
+        @Suppress("BlockingMethodInNonBlockingContext")
+        runBlocking {
+            mutex.withLock { closeInternal() }
+        }
         liteRtLmEngine.close()
     }
 
@@ -208,8 +217,14 @@ class LlmInferenceEngine @Inject constructor(
         _activeModelId.value = null
     }
 
-    // ── Файловые утилиты ──────────────────────────────────────────────────────
+    // ── Файловые утилиты ──────────────────────────────────────────────────
 
+    /**
+     * FIX #3: унифицирован путь модели.
+     * Раньше: getExternalFilesDir(null) использовался здесь,
+     * а PublicHuggingFaceModelDownloader также сохранял в getExternalFilesDir(null).
+     * Оба класса теперь единообразно используют getExternalFilesDir(null) ?: filesDir.
+     */
     fun getModelFile(model: OfflineModelInfo): File {
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
