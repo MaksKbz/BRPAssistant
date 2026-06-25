@@ -19,14 +19,14 @@ class RemoteLlmEngine @Inject constructor(
     private val settingsRepository: SettingsRepository,
     /**
      * FIX #12: OkHttpClient инжектируется как синглтон из AppModule.
-     * FIX #13: apiClient создаётся одинажды в init-блоке,
+     * FIX #13: apiClient создаётся один раз в init-блоке,
      * а не пересоздаётся на каждый запрос.
      */
     private val client: OkHttpClient
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    // FIX #13: создаётся одинажды вместо нового экземпляра при каждом запросе
+    // FIX #13: создаётся один раз вместо нового экземпляра при каждом запросе
     private val apiClient: OkHttpClient = client.newBuilder()
         .followRedirects(true)
         .followSslRedirects(true)
@@ -89,6 +89,32 @@ class RemoteLlmEngine @Inject constructor(
             }
         }
 
+    /**
+     * FIX #4: перегрузка с явными параметрами.
+     * UseCase читает DataStore один раз атомарно и передаёт здесь,
+     * исключая race condition при смене провайдера в процессе запроса.
+     */
+    suspend fun generateResponse(
+        prompt: String,
+        provider: String,
+        modelName: String,
+        apiKey: String,
+        systemPrompt: String?,
+        temperature: Float,
+        onPartial: (String) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val sysPrompt = systemPrompt.orEmpty()
+        if (provider == "Gemini") {
+            generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+        } else {
+            generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+        }
+    }
+
+    /**
+     * Старый метод — оставлен для обратной совместимости.
+     * Читает настройки из DataStore и делегирует в основную перегрузку.
+     */
     suspend fun generateResponse(
         prompt: String,
         onPartial: (String) -> Unit
@@ -96,28 +122,32 @@ class RemoteLlmEngine @Inject constructor(
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
         val modelName = settingsRepository.aiModelName.first()
             ?: if (provider == "Gemini") "gemini-1.5-flash" else "llama-3.3-70b-versatile"
-        val systemPrompt = settingsRepository.aiSystemPrompt.first()
+        val systemPrompt = settingsRepository.aiSystemPrompt.first().orEmpty()
         val temperature = settingsRepository.aiTemperature.first()
 
         if (provider == "Gemini") {
-            generateGeminiRawHttp(prompt, modelName, systemPrompt, temperature, onPartial)
+            val apiKey = settingsRepository.geminiApiKey.first()
+            if (apiKey.isNullOrBlank()) return@withContext Result.failure(
+                Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер.")
+            )
+            generateGeminiRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
         } else {
-            generateGroqRawHttp(prompt, modelName, systemPrompt, temperature, onPartial)
+            val apiKey = settingsRepository.groqApiKey.first()
+            if (apiKey.isNullOrBlank()) return@withContext Result.failure(
+                Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер.")
+            )
+            generateGroqRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
         }
     }
 
     private suspend fun generateGeminiRawHttp(
         prompt: String,
         modelName: String,
+        apiKey: String,
         systemPrompt: String,
         temperature: Float,
         onPartial: (String) -> Unit
     ): Result<String> {
-        val apiKey = settingsRepository.geminiApiKey.first()
-        if (apiKey.isNullOrBlank()) return Result.failure(
-            Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер.")
-        )
-
         val attempts = if (modelName.contains("2.0") || modelName.contains("lite")) {
             listOf("v1beta")
         } else {
@@ -128,7 +158,7 @@ class RemoteLlmEngine @Inject constructor(
 
         for (apiVersion in attempts) {
             try {
-                // FIX: апи-ключ передаётся только через заголовок x-goog-api-key,
+                // API-ключ передаётся только через заголовок x-goog-api-key,
                 // а не через URL (?key=), чтобы не попадать в логи сервера
                 val url = "https://generativelanguage.googleapis.com/$apiVersion/models/$modelName:generateContent"
 
@@ -197,15 +227,11 @@ class RemoteLlmEngine @Inject constructor(
     private suspend fun generateGroqRawHttp(
         prompt: String,
         modelName: String,
+        apiKey: String,
         systemPrompt: String,
         temperature: Float,
         onPartial: (String) -> Unit
     ): Result<String> {
-        val apiKey = settingsRepository.groqApiKey.first()
-        if (apiKey.isNullOrBlank()) return Result.failure(
-            Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер.")
-        )
-
         return try {
             val url = "https://api.groq.com/openai/v1/chat/completions"
 
