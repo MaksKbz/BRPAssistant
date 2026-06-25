@@ -17,10 +17,15 @@ data class OfflineModelInfo(
     val isCustom: Boolean = false
 )
 
+/**
+ * FIX #10: удалён PromptStyle.QWEN3 — ни одна модель в каталоге его не использует.
+ * Объявленный, но нигде не применяемый enum-вариант создавал мёртвую ветку кода
+ * в PromptBuilder и делал невозможным тестирование этого пути.
+ * Вернуть при добавлении реальной Qwen3-модели в PublicOfflineModelCatalog.
+ */
 @Serializable
 enum class PromptStyle {
     CHATML,
-    QWEN3,
     PHI3
 }
 
@@ -84,7 +89,7 @@ object PublicOfflineModelCatalog {
         return when {
             totalRamGb >= 6 -> models.first { it.id == "phi3_5_mini_it_bin" }
             totalRamGb >= 4 -> models.first { it.id == "qwen2_5_1_5b_it_bin" }
-            else -> models.first { it.id == "qwen2_5_0_5b_it_bin" }
+            else            -> models.first { it.id == "qwen2_5_0_5b_it_bin" }
         }
     }
 }

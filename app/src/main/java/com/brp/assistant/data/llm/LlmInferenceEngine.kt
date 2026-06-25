@@ -18,7 +18,6 @@ import javax.inject.Singleton
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
-    // FIX #7: @param:ApplicationContext → @ApplicationContext (стандартный Hilt стиль)
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository
 ) {
@@ -31,6 +30,12 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private var mediaPipeInference: LlmInference? = null
+
+    /**
+     * FIX #5: scope хранится в val для возможности отмены через destroy().
+     * SupervisorJob позволяет дочерним корутинам падать независимо,
+     * не отменяя весь scope.
+     */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutex = Mutex()
 
@@ -39,8 +44,6 @@ class LlmInferenceEngine @Inject constructor(
 
     private var activeModelInfo: OfflineModelInfo? = null
 
-    // FIX #5: _isInitialized — StateFlow вместо var, чтобы избежать race condition:
-    // UI/другие корутины могут наблюдать за готовностью вместо polling isReady()
     private val _isInitialized = MutableStateFlow(false)
     val isInitializedFlow: StateFlow<Boolean> = _isInitialized.asStateFlow()
 
@@ -72,7 +75,6 @@ class LlmInferenceEngine @Inject constructor(
 
                 mediaPipeInference = LlmInference.createFromOptions(context, options)
                 activeModelInfo = model
-                // FIX #5: _isInitialized.value устанавливается атомарно вместе с _activeModelId
                 _isInitialized.value = true
                 _activeModelId.value = model.id
                 settingsRepository.setActiveModelId(model.id)
@@ -104,6 +106,21 @@ class LlmInferenceEngine @Inject constructor(
 
     suspend fun close() = mutex.withLock { closeInternal() }
 
+    /**
+     * FIX #5: destroy() отменяет CoroutineScope и освобождает все ресурсы.
+     * Вызывать при уничтожении компонента (например, в ViewModel.onCleared())
+     * или при смене модели, чтобы избежать утечки памяти через незавершённые
+     * корутины, держащие ссылку на context.
+     */
+    fun destroy() {
+        scope.cancel()
+        try { mediaPipeInference?.close() } catch (e: Throwable) {}
+        mediaPipeInference = null
+        _isInitialized.value = false
+        activeModelInfo = null
+        _activeModelId.value = null
+    }
+
     private fun closeInternal() {
         try { mediaPipeInference?.close() } catch (e: Throwable) {}
         mediaPipeInference = null
@@ -113,12 +130,11 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     fun getModelFile(model: OfflineModelInfo): File {
-        val baseDir  = context.getExternalFilesDir(null) ?: context.filesDir
+        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
         return File(modelDir, model.filename)
     }
 
-    // FIX #9: минимальный размер = 80% от approxSizeMb модели, но не менее FALLBACK_MIN_FILE_SIZE_BYTES
     fun isModelDownloaded(model: OfflineModelInfo): Boolean {
         val file = getModelFile(model)
         val minSizeBytes = maxOf(
@@ -129,7 +145,7 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     suspend fun deleteModel(model: OfflineModelInfo): Boolean = mutex.withLock {
-        val baseDir  = context.getExternalFilesDir(null) ?: context.filesDir
+        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
         if (model.id == activeModelInfo?.id) closeInternal()
         modelDir.deleteRecursively()

@@ -28,13 +28,28 @@ class DiagnoseUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Flow<Result<DiagnosisResult>> = flow {
         try {
-            // FIX #1: read the correct API key based on selected provider
             val provider = settingsRepository.aiProvider.first() ?: "Gemini"
             val apiKey = if (provider == "Gemini")
                 settingsRepository.geminiApiKey.first()
             else
-                settingsRepository.groqApiKey.first()  // FIX: was grokApiKey (compilation error)
+                settingsRepository.groqApiKey.first()
+
+            /**
+             * FIX #4: убран тихий фоллбек на локальный LLM при отсутствии ключа.
+             * Раньше: если ключ не задан → молча уходил в локальный inference.
+             * Теперь: если выбран облачный провайдер, но ключ не введён —
+             * возвращается явная ошибка с подсказкой пользователю.
+             * Локальный inference используется только если provider = "Local".
+             */
             val useRemote = !apiKey.isNullOrBlank()
+            val isLocalProvider = provider.equals("Local", ignoreCase = true)
+
+            if (!useRemote && !isLocalProvider) {
+                emit(Result.failure(Exception(
+                    "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
+                )))
+                return@flow
+            }
 
             val brpModel = vehicleId?.let { modelRepository.getById(it) }
             val retrieval = retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId)
@@ -97,13 +112,24 @@ class ChatUseCase @Inject constructor(
         history: List<ChatMessage>,
         onPartial: (String) -> Unit
     ): Result<String> {
-        // FIX #1: read the correct API key based on selected provider
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
         val apiKey = if (provider == "Gemini")
             settingsRepository.geminiApiKey.first()
         else
-            settingsRepository.groqApiKey.first()  // FIX: was grokApiKey (compilation error)
+            settingsRepository.groqApiKey.first()
+
+        /**
+         * FIX #4: та же логика, что и в DiagnoseUseCase.
+         * Явная ошибка вместо тихого фоллбека на локальный LLM.
+         */
         val useRemote = !apiKey.isNullOrBlank()
+        val isLocalProvider = provider.equals("Local", ignoreCase = true)
+
+        if (!useRemote && !isLocalProvider) {
+            return Result.failure(Exception(
+                "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
+            ))
+        }
 
         val retrieval = retriever.retrieve(message, mode, vehicleId)
         val cards = retrieval.cards.map { it.card }

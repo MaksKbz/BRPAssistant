@@ -13,21 +13,20 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 @HiltWorker
 class ModelDownloadWorker @AssistedInject constructor(
     @Assisted context: Context,
-    @Assisted params: WorkerParameters
+    @Assisted params: WorkerParameters,
+    /**
+     * FIX #12: OkHttpClient инжектируется как синглтон из AppModule.
+     * Больше не создаётся новый экземпляр на каждый Worker.
+     */
+    private val okHttpClient: OkHttpClient
 ) : CoroutineWorker(context, params) {
 
-    private val client = OkHttpClient.Builder()
-        .followRedirects(false)
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.MINUTES)
-        .build()
-
-    private val commonUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    private val commonUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val initialUrl = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
@@ -45,22 +44,43 @@ class ModelDownloadWorker @AssistedInject constructor(
             val directUrl = getDirectDownloadUrl(initialUrl)
             performDownload(directUrl, tempFile)
 
-            if (tempFile.exists() && tempFile.length() > 1_000_000) {
+            // FIX #6: порог проверки повышен с 1MB до 50MB.
+            // Модели GGUF весят от 420MB, поэтому 1MB был слишком мал —
+            // повреждённый частичный файл мог пройти проверку.
+            val minValidSize = 50L * 1024 * 1024  // 50 MB
+            if (tempFile.exists() && tempFile.length() > minValidSize) {
                 if (outputFile.exists()) outputFile.delete()
                 if (tempFile.renameTo(outputFile)) {
-                    Result.success(Data.Builder().putString(KEY_FILEPATH, outputFile.absolutePath).build())
+                    Result.success(
+                        Data.Builder()
+                            .putString(KEY_FILEPATH, outputFile.absolutePath)
+                            .build()
+                    )
                 } else {
                     tempFile.copyTo(outputFile, overwrite = true)
                     tempFile.delete()
-                    Result.success(Data.Builder().putString(KEY_FILEPATH, outputFile.absolutePath).build())
+                    Result.success(
+                        Data.Builder()
+                            .putString(KEY_FILEPATH, outputFile.absolutePath)
+                            .build()
+                    )
                 }
             } else {
-                Result.failure(Data.Builder().putString("error", "Файл поврежден или пуст").build())
+                tempFile.delete()
+                Result.failure(
+                    Data.Builder()
+                        .putString("error", "Файл повреждён или слишком мал (< 50 МБ)")
+                        .build()
+                )
             }
         } catch (e: Exception) {
             Log.e("ModelDownloadWorker", "Download failed: ${e.message}")
             if (e.message?.contains("401") == true || e.message?.contains("403") == true) {
-                Result.failure(Data.Builder().putString("error", "Доступ ограничен (401/403). Попробуйте модель Qwen или перезагрузите сеть.").build())
+                Result.failure(
+                    Data.Builder()
+                        .putString("error", "Доступ ограничен (401/403). Попробуйте модель Qwen или перезагрузите сеть.")
+                        .build()
+                )
             } else if (runAttemptCount < 2) {
                 Result.retry()
             } else {
@@ -69,32 +89,43 @@ class ModelDownloadWorker @AssistedInject constructor(
         }
     }
 
-    private fun getDirectDownloadUrl(initialUrl: String): String {
-        val urlWithParam = if (initialUrl.contains("?")) "$initialUrl&download=true" else "$initialUrl?download=true"
-        val request = Request.Builder()
-            .url(urlWithParam)
-            .head()
-            .header("User-Agent", commonUserAgent)
-            .header("Referer", "https://huggingface.co/")
-            .build()
+    /**
+     * FIX #3: метод сделан suspend и выполняется в withContext(Dispatchers.IO).
+     * Ранее был обычным fun — блокирующий сетевой вызов мог привести к
+     * NetworkOnMainThreadException если Worker запускался не на IO-диспатчере.
+     */
+    private suspend fun getDirectDownloadUrl(initialUrl: String): String =
+        withContext(Dispatchers.IO) {
+            val urlWithParam = if (initialUrl.contains("?"))
+                "$initialUrl&download=true"
+            else
+                "$initialUrl?download=true"
 
-        client.newCall(request).execute().use { response ->
-            if (response.code in 300..399) {
-                return response.header("Location") ?: initialUrl
-            }
-            if (!response.isSuccessful) {
-                val getRequest = Request.Builder()
-                    .url(urlWithParam)
-                    .header("User-Agent", commonUserAgent)
-                    .header("Range", "bytes=0-0")
-                    .build()
-                client.newCall(getRequest).execute().use { gr ->
-                    if (gr.code in 300..399) return gr.header("Location") ?: initialUrl
+            val request = Request.Builder()
+                .url(urlWithParam)
+                .head()
+                .header("User-Agent", commonUserAgent)
+                .header("Referer", "https://huggingface.co/")
+                .build()
+
+            okHttpClient.newCall(request).execute().use { response ->
+                if (response.code in 300..399) {
+                    return@withContext response.header("Location") ?: initialUrl
+                }
+                if (!response.isSuccessful) {
+                    val getRequest = Request.Builder()
+                        .url(urlWithParam)
+                        .header("User-Agent", commonUserAgent)
+                        .header("Range", "bytes=0-0")
+                        .build()
+                    okHttpClient.newCall(getRequest).execute().use { gr ->
+                        if (gr.code in 300..399)
+                            return@withContext gr.header("Location") ?: initialUrl
+                    }
                 }
             }
+            initialUrl
         }
-        return initialUrl
-    }
 
     private suspend fun performDownload(url: String, tempFile: File) {
         if (tempFile.exists() && tempFile.length() < 1024) tempFile.delete()
@@ -109,7 +140,9 @@ class ModelDownloadWorker @AssistedInject constructor(
             }
             .build()
 
-        val downloadClient = client.newBuilder().followRedirects(true).build()
+        // Дочерний клиент с followRedirects=true для финальной загрузки.
+        // newBuilder() не создаёт новый пул соединений — переиспользует родительский.
+        val downloadClient = okHttpClient.newBuilder().followRedirects(true).build()
         downloadClient.newCall(request).execute().use { response ->
             if (response.code == 416) {
                 tempFile.delete()
@@ -122,13 +155,16 @@ class ModelDownloadWorker @AssistedInject constructor(
                 }
                 throw IOException("Access Denied (${response.code})")
             }
-            if (!response.isSuccessful && response.code != 206) throw IOException("Server Error ${response.code}")
+            if (!response.isSuccessful && response.code != 206)
+                throw IOException("Server Error ${response.code}")
 
             val body = response.body ?: throw IOException("Empty body")
-            val total = if (response.code == 206) alreadyDownloaded + body.contentLength() else body.contentLength()
+            val total = if (response.code == 206)
+                alreadyDownloaded + body.contentLength()
+            else
+                body.contentLength()
             val appendMode = response.code == 206
 
-            // FIX #1: единственный поток записи — больше нет двойного FileOutputStream
             FileOutputStream(tempFile, appendMode).use { outputStream ->
                 body.byteStream().use { input ->
                     val buffer = ByteArray(128 * 1024)

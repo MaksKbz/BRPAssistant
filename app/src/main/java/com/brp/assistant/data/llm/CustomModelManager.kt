@@ -40,13 +40,9 @@ class CustomModelManager @Inject constructor(
     suspend fun removeCustomModel(modelId: String) {
         val current = getCustomModels().filter { it.id != modelId }
         saveCustomModels(current)
-        
-        // Удаляем файлы
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/$modelId")
-        if (modelDir.exists()) {
-            modelDir.deleteRecursively()
-        }
+        if (modelDir.exists()) modelDir.deleteRecursively()
     }
 
     private suspend fun saveCustomModels(models: List<OfflineModelInfo>) {
@@ -54,44 +50,57 @@ class CustomModelManager @Inject constructor(
         settingsRepository.setCustomModelsJson(jsonString)
     }
 
-    suspend fun importFile(uri: Uri, fileName: String): Result<OfflineModelInfo> = withContext(Dispatchers.IO) {
-        try {
-            val id = "custom_" + UUID.randomUUID().toString().take(8)
-            val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
-            val modelDir = File(baseDir, "models/$id")
-            if (!modelDir.exists()) modelDir.mkdirs()
+    suspend fun importFile(uri: Uri, fileName: String): Result<OfflineModelInfo> =
+        withContext(Dispatchers.IO) {
+            // FIX #7: проверка расширения файла.
+            // MediaPipe принимает только .gguf и .bin — любой другой файл
+            // вызывает краш при инициализации LlmInference.createFromOptions().
+            val lowerName = fileName.lowercase()
+            if (!lowerName.endsWith(".gguf") && !lowerName.endsWith(".bin")) {
+                return@withContext Result.failure(
+                    Exception("Неподдерживаемый формат файла. Используйте .gguf или .bin")
+                )
+            }
 
-            val outFile = File(modelDir, fileName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(outFile).use { output ->
-                    input.copyTo(output)
-                }
-            } ?: return@withContext Result.failure(Exception("Не удалось открыть файл"))
+            try {
+                val id = "custom_" + UUID.randomUUID().toString().take(8)
+                val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
+                val modelDir = File(baseDir, "models/$id")
+                if (!modelDir.exists()) modelDir.mkdirs()
 
-            val modelInfo = OfflineModelInfo(
-                id = id,
-                title = "Пользовательская: $fileName",
-                repoId = "custom",
-                filename = fileName,
-                license = "Custom",
-                approxSizeMb = (outFile.length() / (1024 * 1024)).toInt(),
-                minRamGb = 4,
-                promptStyle = PromptStyle.CHATML,
-                description = "Модель загружена пользователем из файла.",
-                isCustom = true
-            )
+                val outFile = File(modelDir, fileName)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(outFile).use { output ->
+                        input.copyTo(output)
+                    }
+                } ?: return@withContext Result.failure(Exception("Не удалось открыть файл"))
 
-            addCustomModel(modelInfo)
-            Result.success(modelInfo)
-        } catch (e: Exception) {
-            Result.failure(e)
+                val modelInfo = OfflineModelInfo(
+                    id = id,
+                    title = "Пользовательская: $fileName",
+                    repoId = "custom",
+                    filename = fileName,
+                    license = "Custom",
+                    approxSizeMb = (outFile.length() / (1024 * 1024)).toInt(),
+                    minRamGb = 4,
+                    promptStyle = PromptStyle.CHATML,
+                    description = "Модель загружена пользователем из файла.",
+                    isCustom = true
+                )
+
+                addCustomModel(modelInfo)
+                Result.success(modelInfo)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
-    }
 
     suspend fun addExternalUrl(title: String, url: String): OfflineModelInfo {
         val id = "custom_" + UUID.randomUUID().toString().take(8)
-        val fileName = url.substringAfterLast("/").substringBefore("?").ifEmpty { "model.bin" }
-        
+        val fileName = url.substringAfterLast("/")
+            .substringBefore("?")
+            .ifEmpty { "model.bin" }
+
         val modelInfo = OfflineModelInfo(
             id = id,
             title = title,
@@ -105,7 +114,7 @@ class CustomModelManager @Inject constructor(
             downloadUrl = url,
             isCustom = true
         )
-        
+
         addCustomModel(modelInfo)
         return modelInfo
     }

@@ -36,48 +36,67 @@ class UnifiedRetriever @Inject constructor(
 
         val keywords = extractKeywords(query)
 
-        // Resolve selected model once
         val selectedModel: BrpModel? = selectedModelId?.let { modelDao.getById(it) }
 
         // ── Knowledge cards ──────────────────────────────────────────────────────
         val cards = when (mode) {
             RetrievalMode.DIAGNOSIS, RetrievalMode.BOTH -> {
 
-                // 1. FTS search across all cards
+                // 1. FTS search
                 val ftsRaw = if (keywords.isNotBlank())
                     knowledgeDao.searchFullText(keywords, topK * 3)
                 else emptyList()
 
+                /**
+                 * FIX #8: фоллбек на LIKE-поиск при пустых FTS-результатах.
+                 *
+                 * SQLite FTS4 с токенайзером unicode61 плохо обрабатывает
+                 * кириллицу на Android — запрос с русскими словами нередко
+                 * возвращает пустой список даже при наличии совпадений.
+                 *
+                 * Решение: если FTS вернул пустой список, делаем LIKE-поиск
+                 * через getByBrandAndCategory или getByModelFamily (они уже
+                 * существуют в KnowledgeDao) и фильтруем по symptom/fullText.
+                 * LIKE работает с кириллицей корректно.
+                 */
+                val ftsResults = if (ftsRaw.isEmpty() && keywords.isNotBlank() && selectedModel != null) {
+                    // Фоллбек: берём все карточки по модели и фильтруем вручную
+                    val byFamily = knowledgeDao.getByModelFamily(
+                        brand = selectedModel.brand,
+                        modelFamily = selectedModel.subcategory
+                    )
+                    val firstKeyword = keywords.split(" OR ").firstOrNull()?.trim() ?: ""
+                    if (firstKeyword.isNotBlank()) {
+                        byFamily.filter { card ->
+                            card.symptom.contains(firstKeyword, ignoreCase = true) ||
+                            card.fullText.contains(firstKeyword, ignoreCase = true) ||
+                            card.causes.contains(firstKeyword, ignoreCase = true)
+                        }
+                    } else byFamily
+                } else ftsRaw
+
                 // 2. Strict model-scoped candidates
-                //    FIX: use AND (brand AND equipmentType) instead of OR
-                //    Priority: modelFamily match > brand+category > brand only
                 val scopedCards: List<KnowledgeCard> = if (selectedModel != null) {
                     val byFamily = knowledgeDao.getByModelFamily(
                         brand = selectedModel.brand,
-                        modelFamily = selectedModel.subcategory  // e.g. "Renegade"
+                        modelFamily = selectedModel.subcategory
                     )
                     val byBrandAndCat = knowledgeDao.getByBrandAndCategory(
                         brand = selectedModel.brand,
                         category = selectedModel.category
                     )
-                    // Merge: family-specific first, then brand+category, deduplicate
                     (byFamily + byBrandAndCat).distinctBy { it.id }
                 } else {
-                    // No model selected — return nothing from scoped pool;
-                    // rely entirely on FTS so we don't dump the whole DB
                     emptyList()
                 }
 
-                // 3. Combine FTS + scoped, then apply strict model filter
-                val combined = (ftsRaw + scopedCards).distinctBy { it.id }
+                // 3. Combine FTS + scoped
+                val combined = (ftsResults + scopedCards).distinctBy { it.id }
 
                 val filtered = if (selectedModel != null) {
-                    combined.filter { card ->
-                        isCardRelevantToModel(card, selectedModel)
-                    }
+                    combined.filter { card -> isCardRelevantToModel(card, selectedModel) }
                 } else {
-                    // No model context — only return FTS hits, limit scope
-                    ftsRaw.distinctBy { it.id }
+                    ftsResults.distinctBy { it.id }
                 }
 
                 filtered
@@ -100,10 +119,8 @@ class UnifiedRetriever @Inject constructor(
                 (byModel + byQuery + byPlatform)
                     .distinctBy { it.id }
                     .filter { acc ->
-                        // FIX: require explicit model compatibility when model is selected
-                        if (selectedModel != null) {
-                            isAccessoryCompatible(acc, selectedModel)
-                        } else true
+                        if (selectedModel != null) isAccessoryCompatible(acc, selectedModel)
+                        else true
                     }
                     .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
                     .sortedByDescending { it.score }
@@ -119,32 +136,17 @@ class UnifiedRetriever @Inject constructor(
         return RetrievalResult(cards, accessories, modelResults)
     }
 
-    /**
-     * FIX: strict relevance check for a knowledge card against the selected model.
-     * A card is relevant only if:
-     *   - brand matches exactly, AND
-     *   - equipmentType matches the model's category, AND
-     *   - modelFamily is null (generic) OR matches model's subcategory
-     */
     private fun isCardRelevantToModel(card: KnowledgeCard, model: BrpModel): Boolean {
         val brandMatch = card.brand.equals(model.brand, ignoreCase = true)
         val categoryMatch = card.equipmentType.equals(model.category, ignoreCase = true)
         val familyMatch = card.modelFamily.isNullOrBlank() ||
             card.modelFamily.equals(model.subcategory, ignoreCase = true)
-        // compatibleModels JSON check: if card explicitly lists models and selected
-        // model is NOT in the list — exclude it
         val compatibleModelsOk = card.compatibleModels.isNullOrBlank() ||
             card.compatibleModels.contains(model.id, ignoreCase = true) ||
             card.compatibleModels.contains(model.subcategory ?: "", ignoreCase = true)
-
         return brandMatch && categoryMatch && familyMatch && compatibleModelsOk
     }
 
-    /**
-     * FIX: accessory compatibility — must match model id OR platform.
-     * byModel join already guarantees compatibility, but byQuery/byPlatform
-     * results need explicit check.
-     */
     private fun isAccessoryCompatible(acc: Accessory, model: BrpModel): Boolean {
         val platformOk = !model.platform.isNullOrBlank() &&
             acc.compatiblePlatforms?.contains(model.platform, ignoreCase = true) == true

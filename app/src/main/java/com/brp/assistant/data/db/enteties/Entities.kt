@@ -1,6 +1,5 @@
 package com.brp.assistant.data.db.enteties
 
-import androidx.annotation.NonNull
 import androidx.room.*
 
 // ============================================================
@@ -73,16 +72,16 @@ data class KnowledgeCard(
     val equipmentType: String,
     val brand: String,
     val modelFamily: String? = null,
-    val node: String,                        // engine, drivetrain, cooling, electrical, cvt, suspension
+    val node: String,
     val symptom: String,
-    val riskLevel: String,                   // low, medium, high, critical
+    val riskLevel: String,
     val requiresEvacuation: Int,
-    val compatibleModels: String? = null,    // JSON
-    val causes: String,                      // JSON array
-    val steps: String,                       // JSON array
-    val canDo: String,                       // JSON
-    val mustNotDo: String,                   // JSON
-    val stopConditions: String,              // JSON
+    val compatibleModels: String? = null,
+    val causes: String,
+    val steps: String,
+    val canDo: String,
+    val mustNotDo: String,
+    val stopConditions: String,
     val fullText: String
 )
 
@@ -92,20 +91,33 @@ data class KnowledgeCard(
 @Entity(tableName = "fault_codes")
 data class FaultCode(
     @PrimaryKey val code: String,
-    val brand: String,                       // sea-doo, can-am, ski-doo
+    val brand: String,
     val description: String,
-    val possibleCauses: String? = null,      // JSON
+    val possibleCauses: String? = null,
     val solution: String? = null
 )
 
 // ============================================================
 // ACCESSORY COMPATIBILITY
+// FIX #11: добавлен onDelete = ForeignKey.CASCADE на оба внешних ключа.
+// Без этого при удалении аксессуара или модели записи в этой таблице
+// оставались «висячими» и загрязняли результаты поиска.
 // ============================================================
 @Entity(
     tableName = "accessory_compatibility",
     foreignKeys = [
-        ForeignKey(entity = Accessory::class, parentColumns = ["id"], childColumns = ["accessoryId"]),
-        ForeignKey(entity = BrpModel::class, parentColumns = ["id"], childColumns = ["modelId"])
+        ForeignKey(
+            entity = Accessory::class,
+            parentColumns = ["id"],
+            childColumns = ["accessoryId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = BrpModel::class,
+            parentColumns = ["id"],
+            childColumns = ["modelId"],
+            onDelete = ForeignKey.CASCADE
+        )
     ],
     indices = [Index("accessoryId"), Index("modelId")]
 )
