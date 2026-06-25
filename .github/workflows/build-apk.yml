@@ -28,9 +28,6 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.13
-
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -42,15 +39,18 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: gradle assembleDebug --stacktrace --no-daemon
 
       - name: Find APK
         id: find_apk
         run: |
-          APK_PATH=$(find . -name "*.apk" -path "*/debug/*" | head -1)
+          echo "=== Список всех APK в проекте ==="
+          find . -name "*.apk" 2>/dev/null || echo "APK не найден"
+          echo "=== Содержимое app/build (top 40 строк) ==="
+          find app/build -maxdepth 5 2>/dev/null | head -40 || echo "app/build пустой или отсутствует"
+          APK_PATH=$(find . -name "*.apk" -path "*/debug/*" 2>/dev/null | head -1)
           if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK not found! Build may have failed silently."
-            find . -name "*.apk" || true
+            echo "ERROR: APK not found after build!"
             exit 1
           fi
           echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
@@ -72,7 +72,6 @@ jobs:
           DEST="$DIR/BRPAssistant-v${{ steps.version.outputs.VERSION_NAME }}-${{ steps.version.outputs.SHORT_SHA }}-debug.apk"
           mv "$SRC" "$DEST"
           echo "FINAL_APK=$DEST" >> $GITHUB_OUTPUT
-          echo "Renamed to: $DEST"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -84,10 +83,8 @@ jobs:
       - name: Post build summary
         run: |
           echo "## ✅ APK собран успешно" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Версия:** v${{ steps.version.outputs.VERSION_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Коммит:** ${{ steps.version.outputs.SHORT_SHA }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Тип:** Debug" >> $GITHUB_STEP_SUMMARY
           echo "- **Хранится:** 7 дней" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Скачать APK можно на вкладке **Actions → последний run → Artifacts**" >> $GITHUB_STEP_SUMMARY
+          echo "Скачать APK: Actions → последний run → Artifacts" >> $GITHUB_STEP_SUMMARY
