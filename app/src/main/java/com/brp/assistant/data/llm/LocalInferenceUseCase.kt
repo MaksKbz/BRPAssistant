@@ -1,9 +1,9 @@
 package com.brp.assistant.data.llm
 
 import android.util.Log
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.domain.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -93,7 +93,7 @@ class LocalInferenceUseCase @Inject constructor(
         return runInference(prompt, onPartial)
     }
 
-    // ── Internal ──────────────────────────────────────────────────
+    // ── Internal ────────────────────────────────────────────────
     private suspend fun runInference(
         prompt: String,
         onPartial: (String) -> Unit
