@@ -19,9 +19,6 @@ data class OfflineModelInfo(
 
 /**
  * FIX #10: удалён PromptStyle.QWEN3 — ни одна модель в каталоге его не использует.
- * Объявленный, но нигде не применяемый enum-вариант создавал мёртвую ветку кода
- * в PromptBuilder и делал невозможным тестирование этого пути.
- * Вернуть при добавлении реальной Qwen3-модели в PublicOfflineModelCatalog.
  */
 @Serializable
 enum class PromptStyle {
@@ -29,67 +26,89 @@ enum class PromptStyle {
     PHI3
 }
 
+/**
+ * FIX (local inference crash): все модели заменены с .gguf на .task (LiteRT/TFLite bundle).
+ *
+ * Причина: MediaPipe LlmInference на Android ожидает файл в формате TFLite/LiteRT (.task),
+ * а не GGUF. Передача .gguf в setModelPath() вызывает ошибку:
+ *   "Failed to initialize session: RET_CHECK failure ... modelError building tflite model"
+ *
+ * Все модели взяты из официального репозитория litert-community на Hugging Face,
+ * которые явно опубликованы как Android-совместимые LiteRT bundles.
+ *
+ * Источники:
+ *   https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/android
+ *   https://huggingface.co/collections/litert-community/android-models
+ */
 object PublicOfflineModelCatalog {
     val models = listOf(
+
+        // ~450 MB — минимальная модель, запускается на любом устройстве с 3+ ГБ RAM
         OfflineModelInfo(
-            id = "qwen2_5_0_5b_it_bin",
+            id = "qwen2_5_0_5b_it_task",
             title = "Qwen 2.5 0.5B Instruct",
-            repoId = "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-            filename = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            repoId = "litert-community/Qwen2.5-0.5B-Instruct",
+            filename = "Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1024.task",
             license = "Apache 2.0",
-            approxSizeMb = 420,
+            approxSizeMb = 450,
             minRamGb = 3,
             promptStyle = PromptStyle.CHATML,
-            description = "Очень лёгкая локальная модель для слабых и средних телефонов. Хороший старт без API-ключей.",
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true"
+            description = "Очень лёгкая локальная модель. Запускается без API-ключей на слабых и средних устройствах.",
+            downloadUrl = "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1024.task"
         ),
+
+        // ~1 ГБ — оптимальный баланс качества и скорости
         OfflineModelInfo(
-            id = "qwen2_5_1_5b_it_bin",
+            id = "qwen2_5_1_5b_it_task",
             title = "Qwen 2.5 1.5B Instruct",
-            repoId = "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-            filename = "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            repoId = "litert-community/Qwen2.5-1.5B-Instruct",
+            filename = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1024.task",
             license = "Apache 2.0",
-            approxSizeMb = 980,
+            approxSizeMb = 1000,
             minRamGb = 4,
             promptStyle = PromptStyle.CHATML,
-            description = "Лучший баланс качества и скорости для русскоязычного офлайн-чата на телефоне.",
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true"
+            description = "Лучший баланс качества и скорости для офлайн-чата. Рекомендуется для большинства устройств.",
+            downloadUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1024.task"
         ),
+
+        // ~1.5 ГБ — хорошее качество, поддерживает русский язык
         OfflineModelInfo(
-            id = "smollm2_1_7b_it_bin",
-            title = "SmolLM2 1.7B Instruct",
-            repoId = "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF",
-            filename = "smollm2-1.7b-instruct-q4_k_m.gguf",
-            license = "Apache 2.0",
-            approxSizeMb = 1100,
+            id = "gemma2_2b_it_task",
+            title = "Gemma 2 2B Instruct",
+            repoId = "litert-community/Gemma2-2B-IT",
+            filename = "gemma2-2b-it-cpu-int8.task",
+            license = "Gemma",
+            approxSizeMb = 1500,
             minRamGb = 4,
             promptStyle = PromptStyle.CHATML,
-            description = "Свободная компактная instruct-модель для локального использования без авторизации.",
-            downloadUrl = "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf?download=true"
+            description = "Качественная модель от Google. Хороша для диалогов и инструкций.",
+            downloadUrl = "https://huggingface.co/litert-community/Gemma2-2B-IT/resolve/main/gemma2-2b-it-cpu-int8.task"
         ),
+
+        // ~2.3 ГБ — мощная модель для устройств с 6+ ГБ RAM
         OfflineModelInfo(
-            id = "phi3_5_mini_it_bin",
-            title = "Phi-3.5 Mini Instruct",
-            repoId = "microsoft/Phi-3.5-mini-instruct-gguf",
-            filename = "Phi-3.5-mini-instruct-q4_k_m.gguf",
-            license = "MIT",
-            approxSizeMb = 2300,
+            id = "gemma2_3b_it_task",
+            title = "Gemma 2 2B Instruct (GPU)",
+            repoId = "litert-community/Gemma2-2B-IT",
+            filename = "gemma2-2b-it-gpu-int8.task",
+            license = "Gemma",
+            approxSizeMb = 1500,
             minRamGb = 6,
-            promptStyle = PromptStyle.PHI3,
-            description = "Качественная свободная модель для мощных устройств. Хороша для рассуждений и длинных ответов.",
-            downloadUrl = "https://huggingface.co/microsoft/Phi-3.5-mini-instruct-gguf/resolve/main/Phi-3.5-mini-instruct-q4_k_m.gguf?download=true"
+            promptStyle = PromptStyle.CHATML,
+            description = "GPU-вариант Gemma 2 2B. Работает быстрее на устройствах с хорошим GPU (Snapdragon 8 Gen2+).",
+            downloadUrl = "https://huggingface.co/litert-community/Gemma2-2B-IT/resolve/main/gemma2-2b-it-gpu-int8.task"
         )
     )
 
-    fun defaultModel(): OfflineModelInfo = models.first { it.id == "qwen2_5_1_5b_it_bin" }
+    fun defaultModel(): OfflineModelInfo = models.first { it.id == "qwen2_5_1_5b_it_task" }
 
     fun getById(id: String?): OfflineModelInfo? = models.find { it.id == id }
 
     fun recommendedForRam(totalRamGb: Int): OfflineModelInfo {
         return when {
-            totalRamGb >= 6 -> models.first { it.id == "phi3_5_mini_it_bin" }
-            totalRamGb >= 4 -> models.first { it.id == "qwen2_5_1_5b_it_bin" }
-            else            -> models.first { it.id == "qwen2_5_0_5b_it_bin" }
+            totalRamGb >= 6 -> models.first { it.id == "gemma2_3b_it_task" }
+            totalRamGb >= 4 -> models.first { it.id == "qwen2_5_1_5b_it_task" }
+            else            -> models.first { it.id == "qwen2_5_0_5b_it_task" }
         }
     }
 }
