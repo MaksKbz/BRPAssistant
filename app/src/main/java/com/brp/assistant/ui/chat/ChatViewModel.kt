@@ -16,6 +16,12 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Дополнительный wrapper для отображения статуса загрузки в UI-шторке. */
+data class OfflineModelUiItem(
+    val model: OfflineModelInfo,
+    val isDownloaded: Boolean
+)
+
 data class ChatState(
     val messages: List<ChatMessage> = emptyList(),
     val isGenerating: Boolean = false,
@@ -23,13 +29,13 @@ data class ChatState(
     val requiresEvacuation: Boolean = false,
     val error: String? = null,
     val isModelReady: Boolean = false,
-    // Контекст текущего чата — используется для очистки при смене
     val currentVehicleId: String? = null,
     val currentMode: String? = null,
     // Выбранная LLM для этого чата (null = использовать глобальный провайдер)
-    val selectedLlmModelId: String? = null,   // офлайн: id модели
-    val selectedOnlineProvider: String? = null, // онлайн: "Gemini" / "Groq"
-    val availableOfflineModels: List<OfflineModelInfo> = emptyList(),
+    val selectedLlmModelId: String? = null,
+    val selectedOnlineProvider: String? = null,
+    // FIX: храним ВСЕ модели каталога (а не только загруженные)
+    val allOfflineModels: List<OfflineModelUiItem> = emptyList(),
     val activeOfflineModelId: String? = null,
     val currentOnlineProvider: String = "Gemini"
 )
@@ -47,7 +53,6 @@ class ChatViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // FIX #5: unified isModelReady — true if local model loaded OR correct API key present
             combine(
                 llmEngine.activeModelId,
                 settingsRepository.geminiApiKey,
@@ -64,18 +69,24 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // Следим за активной офлайн-моделью и провайдером для UI-селектора
+        // FIX: показываем ВСЕ модели каталога, с флагом isDownloaded для каждой
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
+                val items = PublicOfflineModelCatalog.models.map { model ->
+                    OfflineModelUiItem(
+                        model = model,
+                        isDownloaded = llmEngine.isModelDownloaded(model)
+                    )
+                }
                 _state.update { s ->
                     s.copy(
                         activeOfflineModelId = id,
-                        availableOfflineModels = PublicOfflineModelCatalog.models
-                            .filter { llmEngine.isModelDownloaded(it) }
+                        allOfflineModels = items
                     )
                 }
             }
         }
+
         viewModelScope.launch {
             settingsRepository.aiProvider.collect { p ->
                 _state.update { it.copy(currentOnlineProvider = p ?: "Gemini") }
@@ -83,11 +94,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Вызывается при каждом входе в чат-экран.
-     * Если vehicleId или mode изменились относительно текущего контекста —
-     * полностью сбрасываем историю сообщений и метаданные.
-     */
     fun clearForChat(vehicleId: String?, mode: String) {
         val current = _state.value
         val contextChanged = current.currentVehicleId != vehicleId || current.currentMode != mode
@@ -106,17 +112,14 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** Выбрать офлайн-модель для текущего чата */
     fun selectOfflineLlm(modelId: String?) {
         _state.update { it.copy(selectedLlmModelId = modelId, selectedOnlineProvider = null) }
     }
 
-    /** Выбрать онлайн-провайдера для текущего чата */
     fun selectOnlineLlm(provider: String) {
         _state.update { it.copy(selectedOnlineProvider = provider, selectedLlmModelId = null) }
     }
 
-    /** Сбросить выбор LLM — будет использоваться глобальный провайдер из настроек */
     fun resetLlmSelection() {
         _state.update { it.copy(selectedLlmModelId = null, selectedOnlineProvider = null) }
     }
@@ -125,7 +128,6 @@ class ChatViewModel @Inject constructor(
         val userMsg = ChatMessage(text, MessageRole.USER)
         _state.update { it.copy(messages = it.messages + userMsg, isGenerating = true, error = null) }
 
-        // Если в чате выбрана конкретная LLM — передаём её id, иначе используем переданный modelId
         val effectiveModelId: String? = when {
             _state.value.selectedLlmModelId != null -> _state.value.selectedLlmModelId
             else -> modelId
