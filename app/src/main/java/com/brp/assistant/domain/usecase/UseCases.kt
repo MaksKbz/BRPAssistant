@@ -28,19 +28,19 @@ class DiagnoseUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Flow<Result<DiagnosisResult>> = flow {
         try {
+            // FIX #4: читаем все настройки атомарно здесь,
+            // чтобы provider, key и systemPrompt не расходились с тем,
+            // что перечитывает RemoteLlmEngine.generateResponse()
             val provider = settingsRepository.aiProvider.first() ?: "Gemini"
             val apiKey = if (provider == "Gemini")
                 settingsRepository.geminiApiKey.first()
             else
                 settingsRepository.groqApiKey.first()
+            val modelName = settingsRepository.aiModelName.first()
+                ?: if (provider == "Gemini") "gemini-1.5-flash" else "llama-3.3-70b-versatile"
+            val systemPrompt = settingsRepository.aiSystemPrompt.first()
+            val temperature = settingsRepository.aiTemperature.first()
 
-            /**
-             * FIX #4: убран тихий фоллбек на локальный LLM при отсутствии ключа.
-             * Раньше: если ключ не задан → молча уходил в локальный inference.
-             * Теперь: если выбран облачный провайдер, но ключ не введён —
-             * возвращается явная ошибка с подсказкой пользователю.
-             * Локальный inference используется только если provider = "Local".
-             */
             val useRemote = !apiKey.isNullOrBlank()
             val isLocalProvider = provider.equals("Local", ignoreCase = true)
 
@@ -76,8 +76,18 @@ class DiagnoseUseCase @Inject constructor(
                 style = llm.getActivePromptStyle()
             )
 
+            // FIX #4: передаём provider/modelName/apiKey/systemPrompt явно,
+            // а не полагаемся на повторное чтение DataStore внутри Engine
             val result = if (useRemote) {
-                remoteLlm.generateResponse(prompt, onPartial)
+                remoteLlm.generateResponse(
+                    prompt = prompt,
+                    provider = provider,
+                    modelName = modelName,
+                    apiKey = apiKey!!,
+                    systemPrompt = systemPrompt,
+                    temperature = temperature,
+                    onPartial = onPartial
+                )
             } else {
                 llm.generateResponse(prompt, onPartial)
             }
@@ -112,16 +122,17 @@ class ChatUseCase @Inject constructor(
         history: List<ChatMessage>,
         onPartial: (String) -> Unit
     ): Result<String> {
+        // FIX #4: читаем все за один раз, передаём явно
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
         val apiKey = if (provider == "Gemini")
             settingsRepository.geminiApiKey.first()
         else
             settingsRepository.groqApiKey.first()
+        val modelName = settingsRepository.aiModelName.first()
+            ?: if (provider == "Gemini") "gemini-1.5-flash" else "llama-3.3-70b-versatile"
+        val systemPrompt = settingsRepository.aiSystemPrompt.first()
+        val temperature = settingsRepository.aiTemperature.first()
 
-        /**
-         * FIX #4: та же логика, что и в DiagnoseUseCase.
-         * Явная ошибка вместо тихого фоллбека на локальный LLM.
-         */
         val useRemote = !apiKey.isNullOrBlank()
         val isLocalProvider = provider.equals("Local", ignoreCase = true)
 
@@ -146,7 +157,15 @@ class ChatUseCase @Inject constructor(
         )
 
         return if (useRemote) {
-            remoteLlm.generateResponse(prompt, onPartial)
+            remoteLlm.generateResponse(
+                prompt = prompt,
+                provider = provider,
+                modelName = modelName,
+                apiKey = apiKey!!,
+                systemPrompt = systemPrompt,
+                temperature = temperature,
+                onPartial = onPartial
+            )
         } else {
             llm.generateResponse(prompt, onPartial)
         }
