@@ -14,38 +14,42 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Local LLM engine using MediaPipe LlmInference API.
+ * Единая точка входа для локального LLM-вывода.
  *
- * Требуемый формат модели: .task или .tflite (LiteRT/TFLite bundle).
- * Файлы .gguf НЕ поддерживаются этим рантаймом и вызывают нативный краш:
- *   "RET_CHECK failure ... modelError building tflite model"
+ * Роутит запросы между двумя движками по полю [OfflineModelInfo.format]:
+ *
+ *   [ModelFormat.TASK]      → MediaPipe LlmInference API
+ *                             Файлы: *.task, *.tflite
+ *                             Зависимость: com.google.mediapipe:tasks-genai
+ *
+ *   [ModelFormat.LITERTLM]  → LiteRtLmEngine
+ *                             Файлы: *.litertlm
+ *                             Зависимость: com.google.ai.edge.litertlm:litertlm-android
+ *                             Даёт доступ к Qwen3, Gemma4 и другим новым моделям
+ *                             с поддержкой NPU, Tool Use, мультимодальности.
+ *
+ * Внешний код (ViewModel, UseCase) работает с этим классом напрямую —
+ * детали выбора движка полностью скрыты.
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val liteRtLmEngine: LiteRtLmEngine
 ) {
     companion object {
         private const val TAG = "LlmInferenceEngine"
         private const val MAX_TOKENS = 1024
         private const val DEFAULT_TEMP = 0.7f
-        // FIX #9: базовый порог 10MB; реальный порог берётся из OfflineModelInfo.approxSizeMb
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
-        /**
-         * FIX (crash): поддерживаемые расширения файлов для MediaPipe LlmInference.
-         * .gguf, .bin и другие форматы вызывают нативный краш в LlmInference.createFromOptions().
-         */
-        private val SUPPORTED_EXTENSIONS = setOf("task", "tflite")
+        /** Все поддерживаемые расширения — оба движка */
+        private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
     }
 
+    // ── MediaPipe движок (TASK) ───────────────────────────────────────────────
     private var mediaPipeInference: LlmInference? = null
 
-    /**
-     * FIX #5: scope хранится в val для возможности отмены через destroy().
-     * SupervisorJob позволяет дочерним корутинам падать независимо,
-     * не отменяя весь scope.
-     */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutex = Mutex()
 
@@ -70,14 +74,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    /**
-     * Проверяет, является ли файл поддерживаемым форматом для MediaPipe Android.
-     * .gguf, .bin, .pt и прочие форматы НЕ поддерживаются.
-     */
-    private fun isSupportedModelFormat(file: File): Boolean {
-        val ext = file.extension.lowercase()
-        return ext in SUPPORTED_EXTENSIONS
-    }
+    // ── Инициализация ─────────────────────────────────────────────────────────
 
     suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -91,32 +88,38 @@ class LlmInferenceEngine @Inject constructor(
                     )
                 }
 
-                // FIX (критический краш): проверяем формат ДО передачи в MediaPipe.
-                // Если файл .gguf или другого неподдерживаемого формата, нативный краш неизбежен.
-                if (!isSupportedModelFormat(modelFile)) {
-                    val ext = modelFile.extension
-                    Log.e(TAG, "Unsupported model format: .$ext (file: ${modelFile.name})")
+                val ext = modelFile.extension.lowercase()
+                if (ext !in SUPPORTED_EXTENSIONS) {
                     return@withContext Result.failure(
                         Exception(
                             "Неподдерживаемый формат модели: .${ext}\n" +
-                            "Android-движок (MediaPipe) поддерживает только .task и .tflite.\n" +
-                            "Удалите модель и скачайте заново."
+                            "Поддерживаются: .task, .tflite, .litertlm"
                         )
                     )
                 }
 
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelFile.absolutePath)
-                    .setMaxTokens(MAX_TOKENS)
-                    .setTemperature(DEFAULT_TEMP)
-                    .build()
+                // ── Роутинг по формату ────────────────────────────────────────
+                val result = when (model.format) {
+                    ModelFormat.LITERTLM -> {
+                        Log.i(TAG, "Routing to LiteRtLmEngine: ${model.title}")
+                        liteRtLmEngine.initialize(model, modelFile)
+                    }
+                    ModelFormat.TASK -> {
+                        Log.i(TAG, "Routing to MediaPipe: ${model.title}")
+                        initMediaPipe(modelFile)
+                    }
+                }
 
-                mediaPipeInference = LlmInference.createFromOptions(context, options)
-                activeModelInfo = model
-                _isInitialized.value = true
-                _activeModelId.value = model.id
-                settingsRepository.setActiveModelId(model.id)
-                Result.success(Unit)
+                if (result.isSuccess) {
+                    activeModelInfo = model
+                    _isInitialized.value = true
+                    _activeModelId.value = model.id
+                    settingsRepository.setActiveModelId(model.id)
+                } else {
+                    _isInitialized.value = false
+                }
+                result
+
             } catch (e: Throwable) {
                 Log.e(TAG, "Init failed", e)
                 _isInitialized.value = false
@@ -125,44 +128,87 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    suspend fun generateResponse(prompt: String, onPartial: (String) -> Unit): Result<String> {
-        val inference = mediaPipeInference ?: return Result.failure(Exception("Not ready"))
-        return withContext(Dispatchers.IO) {
-            try {
-                val response = inference.generateResponse(prompt)
-                withContext(Dispatchers.Main) { onPartial(response) }
-                Result.success(response)
-            } catch (e: Exception) {
-                Result.failure(e)
+    private fun initMediaPipe(modelFile: File): Result<Unit> {
+        return try {
+            val options = LlmInference.LlmInferenceOptions.builder()
+                .setModelPath(modelFile.absolutePath)
+                .setMaxTokens(MAX_TOKENS)
+                .setTemperature(DEFAULT_TEMP)
+                .build()
+            mediaPipeInference = LlmInference.createFromOptions(context, options)
+            Result.success(Unit)
+        } catch (e: Throwable) {
+            Log.e(TAG, "MediaPipe init failed", e)
+            Result.failure(e)
+        }
+    }
+
+    // ── Генерация ответа ──────────────────────────────────────────────────────
+
+    /**
+     * Генерирует ответ, прозрачно делегируя активному движку.
+     * Системный промпт передаётся в LiteRT-LM нативно;
+     * MediaPipe получает его как часть уже построенного [prompt].
+     */
+    suspend fun generateResponse(
+        prompt: String,
+        onPartial: (String) -> Unit,
+        systemPrompt: String = ""
+    ): Result<String> {
+        return when (activeModelInfo?.format) {
+            ModelFormat.LITERTLM -> {
+                liteRtLmEngine.generateResponse(prompt, systemPrompt, onPartial)
+            }
+            ModelFormat.TASK, null -> {
+                val inference = mediaPipeInference
+                    ?: return Result.failure(Exception("MediaPipe не инициализирован"))
+                withContext(Dispatchers.IO) {
+                    try {
+                        val response = inference.generateResponse(prompt)
+                        withContext(Dispatchers.Main) { onPartial(response) }
+                        Result.success(response)
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                }
             }
         }
     }
 
-    fun isReady(): Boolean = _isInitialized.value && mediaPipeInference != null
+    // ── Состояние ─────────────────────────────────────────────────────────────
+
+    fun isReady(): Boolean {
+        return _isInitialized.value && when (activeModelInfo?.format) {
+            ModelFormat.LITERTLM -> liteRtLmEngine.isReady()
+            else                 -> mediaPipeInference != null
+        }
+    }
+
     fun getActiveModelId(): String? = activeModelInfo?.id
-    fun getActivePromptStyle(): PromptStyle = activeModelInfo?.promptStyle ?: PromptStyle.CHATML
+
+    fun getActivePromptStyle(): PromptStyle =
+        activeModelInfo?.promptStyle ?: PromptStyle.CHATML
+
+    // ── Жизненный цикл ────────────────────────────────────────────────────────
 
     suspend fun close() = mutex.withLock { closeInternal() }
 
-    /**
-     * FIX #5: destroy() отменяет CoroutineScope и освобождает все ресурсы.
-     */
     fun destroy() {
         scope.cancel()
-        try { mediaPipeInference?.close() } catch (e: Throwable) {}
-        mediaPipeInference = null
-        _isInitialized.value = false
-        activeModelInfo = null
-        _activeModelId.value = null
+        closeInternal()
+        liteRtLmEngine.close()
     }
 
     private fun closeInternal() {
         try { mediaPipeInference?.close() } catch (e: Throwable) {}
         mediaPipeInference = null
+        liteRtLmEngine.close()
         _isInitialized.value = false
         activeModelInfo = null
         _activeModelId.value = null
     }
+
+    // ── Файловые утилиты ──────────────────────────────────────────────────────
 
     fun getModelFile(model: OfflineModelInfo): File {
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
@@ -190,7 +236,7 @@ class LlmInferenceEngine @Inject constructor(
         return PublicOfflineModelCatalog.models.filter { isModelDownloaded(it) }
     }
 
-    private suspend fun loadCustomModels(): List<OfflineModelInfo>> = try {
+    private suspend fun loadCustomModels(): List<OfflineModelInfo> = try {
         val json = settingsRepository.customModelsJson.first() ?: ""
         if (json.isNotEmpty())
             kotlinx.serialization.json.Json { ignoreUnknownKeys = true }

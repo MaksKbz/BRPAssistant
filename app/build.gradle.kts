@@ -44,7 +44,6 @@ android {
     }
     buildFeatures {
         compose = true
-        // FIX #7: enable BuildConfig generation for future secure key injection
         buildConfig = true
     }
     packaging {
@@ -52,6 +51,7 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
         jniLibs {
+            // LiteRT-LM .so библиотеки требуют legacy packaging
             useLegacyPackaging = true
         }
     }
@@ -93,13 +93,19 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
-    // LLM Engines
-    implementation("io.github.aatricks:llmedge:0.4.0beta")
-    implementation(libs.mediapipe.genai)
-    // FIX #7: removed unused generativeai SDK — OkHttp is used directly instead
-    // implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
+    // ── LLM Engines ─────────────────────────────────────────────────────────
 
-    // Coroutines
+    // Движок 1: MediaPipe LlmInference — поддерживает .task файлы
+    implementation(libs.mediapipe.genai)
+
+    // Движок 2: LiteRT-LM — поддерживает .litertlm файлы (Qwen3, Gemma4 и др.)
+    // Документация: https://developers.google.com/edge/litert-lm/android
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.1.1")
+
+    // Устаревший движок (llmedge) — оставлен для совместимости
+    implementation("io.github.aatricks:llmedge:0.4.0beta")
+
+    // ── Coroutines ───────────────────────────────────────────────────────────
     implementation(libs.kotlinx.coroutines.android)
 
     // DataStore
