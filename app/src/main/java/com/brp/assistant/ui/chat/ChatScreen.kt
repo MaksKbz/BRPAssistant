@@ -14,7 +14,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.brp.assistant.data.llm.OfflineModelInfo
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.domain.model.MessageRole
 import com.brp.assistant.ui.components.ChatInputBar
@@ -32,7 +31,7 @@ fun ChatScreen(
     isModelReady: Boolean,
     selectedVehicleName: String?,
     // LLM-селектор
-    availableOfflineModels: List<OfflineModelInfo>,
+    allOfflineModels: List<OfflineModelUiItem>,
     activeOfflineModelId: String?,
     currentOnlineProvider: String,
     selectedLlmModelId: String?,
@@ -54,15 +53,14 @@ fun ChatScreen(
         }
     }
 
-    // Вычисляем label текущей LLM для отображения в AppBar
     val activeLlmLabel: String = when {
         selectedLlmModelId != null -> {
-            availableOfflineModels.find { it.id == selectedLlmModelId }?.title
+            allOfflineModels.find { it.model.id == selectedLlmModelId }?.model?.title
                 ?: "Офлайн-модель"
         }
         selectedOnlineProvider != null -> selectedOnlineProvider
         activeOfflineModelId != null -> {
-            availableOfflineModels.find { it.id == activeOfflineModelId }?.title
+            allOfflineModels.find { it.model.id == activeOfflineModelId }?.model?.title
                 ?: currentOnlineProvider
         }
         else -> currentOnlineProvider
@@ -85,7 +83,6 @@ fun ChatScreen(
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
             },
             actions = {
-                // Кнопка выбора LLM — показывает текущую модель
                 TextButton(
                     onClick = { showLlmSheet = true },
                     contentPadding = PaddingValues(horizontal = 8.dp)
@@ -159,11 +156,10 @@ fun ChatScreen(
         )
     }
 
-    // BottomSheet: выбор LLM
     if (showLlmSheet) {
         ModalBottomSheet(onDismissRequest = { showLlmSheet = false }) {
             LlmSelectorSheet(
-                availableOfflineModels = availableOfflineModels,
+                allOfflineModels = allOfflineModels,
                 activeOfflineModelId = activeOfflineModelId,
                 currentOnlineProvider = currentOnlineProvider,
                 selectedLlmModelId = selectedLlmModelId,
@@ -179,6 +175,10 @@ fun ChatScreen(
                 onReset = {
                     onResetLlm()
                     showLlmSheet = false
+                },
+                onGoToModels = {
+                    showLlmSheet = false
+                    onNavigate(Screen.Models.route)
                 }
             )
         }
@@ -187,14 +187,15 @@ fun ChatScreen(
 
 @Composable
 private fun LlmSelectorSheet(
-    availableOfflineModels: List<OfflineModelInfo>,
+    allOfflineModels: List<OfflineModelUiItem>,
     activeOfflineModelId: String?,
     currentOnlineProvider: String,
     selectedLlmModelId: String?,
     selectedOnlineProvider: String?,
     onSelectOffline: (String) -> Unit,
     onSelectOnline: (String) -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    onGoToModels: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -215,33 +216,69 @@ private fun LlmSelectorSheet(
             label = "По умолчанию ($currentOnlineProvider)",
             subtitle = "Из настроек приложения",
             isSelected = isDefault,
+            enabled = true,
             onClick = onReset
         )
 
-        if (availableOfflineModels.isNotEmpty()) {
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
+        // ===== Локальные модели =====
+        Divider(modifier = Modifier.padding(vertical = 8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
-                "Офлайн-модели",
+                "Локальные модели (Офлайн)",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 4.dp)
+                fontWeight = FontWeight.Bold
             )
-            availableOfflineModels.forEach { model ->
-                val isActive = model.id == activeOfflineModelId
+            TextButton(
+                onClick = onGoToModels,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Скачать", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        if (allOfflineModels.isEmpty()) {
+            // Каталог пуст — такого быть не должно с PublicOfflineModelCatalog
+            Text(
+                "Нет доступных моделей",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+            )
+        } else {
+            allOfflineModels.forEach { item ->
+                val subtitle = when {
+                    item.model.id == activeOfflineModelId -> "Активна"
+                    item.isDownloaded -> "Загружена"
+                    else -> "Не загружена — перейдите в раздел Модели"
+                }
                 LlmOptionRow(
-                    label = model.title,
-                    subtitle = if (isActive) "Активна" else "Загружена",
-                    isSelected = selectedLlmModelId == model.id,
-                    onClick = { onSelectOffline(model.id) }
+                    label = item.model.title,
+                    subtitle = subtitle,
+                    isSelected = selectedLlmModelId == item.model.id,
+                    enabled = item.isDownloaded,
+                    onClick = { onSelectOffline(item.model.id) }
                 )
             }
         }
 
+        // ===== Онлайн-провайдеры =====
         Divider(modifier = Modifier.padding(vertical = 8.dp))
         Text(
             "Онлайн-провайдеры",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 4.dp)
         )
         listOf("Gemini", "Groq").forEach { provider ->
@@ -249,6 +286,7 @@ private fun LlmSelectorSheet(
                 label = provider,
                 subtitle = if (provider == currentOnlineProvider) "Активен в настройках" else "Онлайн",
                 isSelected = selectedOnlineProvider == provider,
+                enabled = true,
                 onClick = { onSelectOnline(provider) }
             )
         }
@@ -260,26 +298,37 @@ private fun LlmOptionRow(
     label: String,
     subtitle: String,
     isSelected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
+    val contentAlpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .then(
+                if (enabled) Modifier.clickable(onClick = onClick)
+                else Modifier  // не кликабельный, если не загружено
+            )
             .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         RadioButton(
             selected = isSelected,
-            onClick = onClick
+            onClick = if (enabled) onClick else null,
+            enabled = enabled
         )
         Spacer(Modifier.width(8.dp))
         Column {
-            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha)
+            )
             Text(
                 subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha)
             )
         }
     }
