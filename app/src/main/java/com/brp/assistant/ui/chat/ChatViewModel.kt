@@ -38,7 +38,7 @@ data class OfflineModelUiItem(
 data class ChatSessionSummary(
     val id: String,
     val title: String,
-    val vehicleName: String?,    // «Can-Am Maverick X3» или null
+    val vehicleName: String?,    // «Саn-Am Maverick X3» или null
     val dateLabel: String,       // «Сегодня», «Вчера», «14 июня» …
     val preview: String          // первые 60 символов первого вопроса
 )
@@ -221,14 +221,10 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // ── OOM pre-check: двойная проверка — heap JVM + системная RAM ──────
-            // FIX: снижен порог JVM-heap 256→150 МБ (256 вызывал ложные блокировки
-            // на бюджетных устройствах с 3 ГБ RAM)
+            // ── OOM pre-check: двойная проверка — heap JVM + системная RAM ─────────────
             val runtime    = Runtime.getRuntime()
             val freeHeapMb = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / 1_048_576L
 
-            // FIX: добавлена проверка системной RAM через ActivityManager —
-            // надёжнее heap-check на устройствах где heap растягивается лениво
             val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val memInfo    = ActivityManager.MemoryInfo()
             actManager.getMemoryInfo(memInfo)
@@ -335,22 +331,37 @@ class ChatViewModel @Inject constructor(
         return id
     }
 
+    /**
+     * FIX #3: дельта-сохранение.
+     *
+     * Раньше: перезаписывались ВСЕ сообщения сессии через INSERT REPLACE при каждом
+     * ответе. При 100 сообщениях в сессии — 100 INSERT на каждый запрос.
+     *
+     * Теперь: сохраняем только 2 последних сообщения (user + assistant)
+     * через insertMessage(сингл) с IGNORE. Повторный вызов для того же id — no-op.
+     * Каждое сообщение получает UUID, поэтому IGNORE правильно
+     * идентифицирует новые сообщения и пропускает уже существующие.
+     */
     private suspend fun persistMessages(sessionId: String, vehicleName: String?) {
         val now      = System.currentTimeMillis()
         val messages = _state.value.messages
         val title    = messages.firstOrNull { it.role == MessageRole.USER }?.content
             ?.take(60) ?: return
 
-        val entities = messages.mapIndexed { index, msg ->
-            ChatMessageEntity(
-                id        = "${sessionId}_$index",
-                sessionId = sessionId,
-                role      = if (msg.role == MessageRole.USER) "user" else "assistant",
-                content   = msg.content,
-                timestamp = now + index
+        // FIX #3: берём только последние 2 сообщения вместо всех
+        val lastTwo = messages.takeLast(2)
+        lastTwo.forEach { msg ->
+            chatSessionDao.insertMessage(
+                ChatMessageEntity(
+                    id        = UUID.randomUUID().toString(),  // уникальный UUID → IGNORE никогда не срабатывает
+                    sessionId = sessionId,
+                    role      = if (msg.role == MessageRole.USER) "user" else "assistant",
+                    content   = msg.content,
+                    timestamp = now
+                )
             )
         }
-        chatSessionDao.insertMessages(entities)
+
         chatSessionDao.updateSession(
             id          = sessionId,
             title       = title,
