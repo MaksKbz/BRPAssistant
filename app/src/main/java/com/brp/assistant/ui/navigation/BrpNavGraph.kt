@@ -2,6 +2,7 @@ package com.brp.assistant.ui.navigation
 
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +14,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.*
 import androidx.navigation.compose.*
+import androidx.compose.ui.platform.LocalContext
 import com.brp.assistant.ui.MainViewModel
 import com.brp.assistant.ui.accessory.AccessoryShopScreen
 import com.brp.assistant.ui.chat.ChatScreen
@@ -22,6 +24,7 @@ import com.brp.assistant.ui.diagnose.DiagnoseScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
 import com.brp.assistant.ui.model.ModelManagerViewModel
+import com.brp.assistant.ui.onboarding.OnboardingScreen
 import com.brp.assistant.ui.situations.SituationsScreen
 import com.brp.assistant.ui.situations.SituationsViewModel
 import com.brp.assistant.ui.maintenance.MaintenanceScreen
@@ -30,6 +33,7 @@ import com.brp.assistant.ui.vehicle.VehicleSelectScreen
 import com.brp.assistant.ui.vehicle.VehicleSelectViewModel
 
 sealed class Screen(val route: String, val label: String) {
+    data object Onboarding    : Screen("onboarding",     "Приветствие")
     data object ModelManager  : Screen("model-manager",  "Настройки ИИ")
     data object Models        : Screen("model-manager",  "Модели")
     data object Home          : Screen("home",           "Главная")
@@ -51,9 +55,6 @@ private val bottomScreens = listOf(
     Screen.Home, Screen.Diagnose, Screen.AccessoryShop, Screen.VehicleSelect
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavItem: иконка + экран, используется и в BottomBar, и в NavigationRail
-// ─────────────────────────────────────────────────────────────────────────────
 private data class NavItem(
     val screen: Screen,
     val iconContent: @Composable () -> Unit
@@ -66,21 +67,29 @@ private val navItems = listOf(
     NavItem(Screen.VehicleSelect) { Icon(Icons.Default.DirectionsCar, contentDescription = Screen.VehicleSelect.label) }
 )
 
+private const val PREFS_NAME   = "brp_prefs"
+private const val KEY_ONBOARDING = "onboarding_done"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrpNavGraph(
     navController: NavHostController   = rememberNavController(),
     mainViewModel: MainViewModel       = hiltViewModel(),
-    // Передаётся из MainActivity через calculateWindowSizeClass()
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
 ) {
+    val context = LocalContext.current
+    val prefs   = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    val startDest = remember {
+        if (prefs.getBoolean(KEY_ONBOARDING, false)) Screen.Home.route
+        else Screen.Onboarding.route
+    }
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute      = navBackStackEntry?.destination?.route
 
     val showNav = currentRoute in bottomScreens.map { it.route } ||
             currentRoute?.startsWith("chat/") == true
 
-    // Планшет (≥600dp) и фолдабл в раскрытом состоянии → NavigationRail
     val useRail = widthSizeClass != WindowWidthSizeClass.Compact
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
@@ -90,15 +99,12 @@ fun BrpNavGraph(
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
     if (useRail && showNav) {
-        // ── Планшет / фолдабл: NavigationRail слева ───────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
-            NavigationRail(
-                modifier = Modifier.fillMaxHeight()
-            ) {
+            NavigationRail(modifier = Modifier.fillMaxHeight()) {
                 Spacer(Modifier.weight(1f))
                 navItems.forEach { item ->
                     val selected = currentRoute?.startsWith(item.screen.route) == true
@@ -125,15 +131,14 @@ fun BrpNavGraph(
                 selectedVehicle     = selectedVehicle,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
-                modifier            = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                widthSizeClass      = widthSizeClass,
+                startDest           = startDest,
+                prefs               = prefs,
+                modifier            = Modifier.weight(1f).fillMaxHeight()
             )
         }
     } else {
-        // ── Телефон: BottomNavigationBar ──────────────────────────────────────
         Scaffold(
-            // safeDrawing insets — корректная работа с gesture-bar и вырезами камеры
             contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 if (showNav) {
@@ -165,16 +170,15 @@ fun BrpNavGraph(
                 selectedVehicle     = selectedVehicle,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
+                widthSizeClass      = widthSizeClass,
+                startDest           = startDest,
+                prefs               = prefs,
                 modifier            = Modifier.padding(innerPadding)
             )
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavHostContent вынесен отдельно, чтобы не дублировать NavHost
-// между ветками Rail (планшет) и BottomBar (телефон)
-// ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NavHostContent(
@@ -185,22 +189,42 @@ private fun NavHostContent(
     selectedVehicle: Any?,
     activeModelName: String?,
     currentTheme: String,
+    widthSizeClass: WindowWidthSizeClass,
+    startDest: String,
+    prefs: android.content.SharedPreferences,
     modifier: Modifier = Modifier
 ) {
     NavHost(
         navController    = navController,
-        startDestination = Screen.Home.route,
+        startDestination = startDest,
         modifier         = modifier
     ) {
+        // ── Onboarding ────────────────────────────────────────────────────────────
+        composable(Screen.Onboarding.route) {
+            OnboardingScreen(
+                onVehicleSelect = { navController.navigate(Screen.VehicleSelect.route) },
+                onModelManager  = { navController.navigate(Screen.ModelManager.route) },
+                onFinish        = {
+                    prefs.edit().putBoolean("onboarding_done", true).apply()
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.Onboarding.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // ── Home ──────────────────────────────────────────────────────────────────
         composable(Screen.Home.route) {
             HomeScreen(
                 selectedVehicleName = selectedVehicleName,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
+                widthSizeClass      = widthSizeClass,
                 onSetTheme          = { mainViewModel.setAppTheme(it) },
                 onNavigate          = { route -> navController.navigate(route) }
             )
         }
+
         composable(Screen.Situations.route) {
             val situVm: SituationsViewModel = hiltViewModel()
             val state by situVm.state.collectAsStateWithLifecycle()
@@ -274,7 +298,11 @@ private fun NavHostContent(
             }
 
             ChatScreen(
-                title                  = when (mode) { "diagnosis" -> "Диагностика"; "accessory" -> "Аксессуары"; else -> "Чат" },
+                title                  = when (mode) {
+                    "diagnosis" -> "Диагностика"
+                    "accessory" -> "Аксессуары"
+                    else        -> "Чат"
+                },
                 messages               = state.messages,
                 riskLevel              = state.riskLevel,
                 requiresEvacuation     = state.requiresEvacuation,
@@ -332,7 +360,9 @@ private fun NavHostContent(
                 suggestedAccessories = emptyList(),
                 onSend               = { text -> navController.navigate(Screen.Chat.createRoute("accessory", text)) },
                 onCategorySelect     = { cat ->
-                    navController.navigate(Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat"))
+                    navController.navigate(
+                        Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat")
+                    )
                 },
                 onSelectVehicle      = { navController.navigate(Screen.VehicleSelect.route) },
                 onNavigate           = { route -> navController.navigate(route) },
