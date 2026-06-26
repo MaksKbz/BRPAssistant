@@ -50,7 +50,14 @@ class SettingsRepository @Inject constructor(
     private companion object {
         const val ENC_PREFS_FILE = "brp_secure_prefs"
         const val KEY_GEMINI    = "gemini_api_key"
-        const val KEY_GROQ      = "grok_api_key"  // название ключа сохранено для обратной совместимости
+
+        // ⚠️ ВАЖНО: значение "grok_api_key" — намеренная опечатка (groq → grok).
+        // НЕ ИСПРАВЛЯТЬ! Ключ уже записан с этим именем в EncryptedSharedPreferences
+        // у всех существующих пользователей. Переименование удалит все сохранённые
+        // API-ключи Groq. Публичное имя свойства (groqApiKey) исправлено,
+        // внутренний ключ хранилища заморожен навсегда.
+        const val KEY_GROQ      = "grok_api_key"
+
         const val TAG           = "SettingsRepo"
     }
 
@@ -79,7 +86,6 @@ class SettingsRepository @Inject constructor(
     val geminiApiKey: Flow<String?> = _geminiApiKey.asStateFlow()
 
     private val _groqApiKey = MutableStateFlow(readEncrypted(KEY_GROQ))
-    // FIX #4: переименовано grokApiKey → groqApiKey
     val groqApiKey: Flow<String?> = _groqApiKey.asStateFlow()
 
     private fun readEncrypted(key: String): String? = encryptedPrefs?.getString(key, null)

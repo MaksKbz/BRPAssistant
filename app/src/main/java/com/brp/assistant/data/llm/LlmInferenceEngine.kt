@@ -137,16 +137,40 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun initMediaPipe(modelFile: File): Result<Unit> {
-        return try {
+        // Сначала пробуем дефолтный бэкенд (GPU/NPU если доступен),
+        // при ошибке явно переключаемся на CPU — совместимо с Dimensity 9300,
+        // Kirin 9000 и другими SoC, где GPU-делегат не поддерживает ряд операций.
+        return tryInitMediaPipeWithCpuFallback(modelFile)
+    }
+
+    private fun tryInitMediaPipeWithCpuFallback(modelFile: File): Result<Unit> {
+        // Попытка 1: дефолтный бэкенд (GPU/NPU)
+        try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
                 .setMaxTokens(MAX_TOKENS)
                 .setTemperature(DEFAULT_TEMP)
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
+            Log.i(TAG, "MediaPipe initialized with default backend")
+            return Result.success(Unit)
+        } catch (e: Throwable) {
+            Log.w(TAG, "MediaPipe default backend failed, retrying with CPU: ${e.message}")
+        }
+
+        // Попытка 2: явный CPU-бэкенд (универсальный fallback)
+        return try {
+            val cpuOptions = LlmInference.LlmInferenceOptions.builder()
+                .setModelPath(modelFile.absolutePath)
+                .setMaxTokens(MAX_TOKENS)
+                .setTemperature(DEFAULT_TEMP)
+                .setPreferredBackend(LlmInference.Backend.CPU)
+                .build()
+            mediaPipeInference = LlmInference.createFromOptions(context, cpuOptions)
+            Log.i(TAG, "MediaPipe initialized with CPU fallback")
             Result.success(Unit)
         } catch (e: Throwable) {
-            Log.e(TAG, "MediaPipe init failed", e)
+            Log.e(TAG, "MediaPipe CPU fallback also failed", e)
             Result.failure(e)
         }
     }
@@ -238,18 +262,18 @@ class LlmInferenceEngine @Inject constructor(
     suspend fun close() = mutex.withLock { closeInternal() }
 
     /**
-     * FIX #3: раньше destroy() вызывал closeInternal() напрямую, без mutex,
-     * что приводило к race condition если одновременно выполнялся initialize().
-     * Теперь: scope.cancel() прекращает все корутины, затем
-     * runBlocking блокирует поток владельца до получения mutex.
+     * FIX #destroy: убран runBlocking — он вызывал ANR/deadlock когда
+     * initialize() держал mutex в момент вызова destroy() (поворот экрана,
+     * смена модели, onDestroy Activity). Теперь:
+     *   1. scope.cancel() — прерывает все активные корутины (включая initialize)
+     *   2. closeInternal() — вызывается напрямую без mutex, т.к. все корутины
+     *      уже отменены и race condition невозможен.
+     * liteRtLmEngine.close() убран отсюда — closeInternal() уже его вызывает,
+     * двойной вызов приводил к нативному крашу (SIGABRT) на NPU-устройствах.
      */
     fun destroy() {
         scope.cancel()
-        @Suppress("BlockingMethodInNonBlockingContext")
-        runBlocking {
-            mutex.withLock { closeInternal() }
-        }
-        liteRtLmEngine.close()
+        closeInternal()
     }
 
     private fun closeInternal() {
@@ -264,16 +288,26 @@ class LlmInferenceEngine @Inject constructor(
     // ── Файловые утилиты ──────────────────────────────────────────────────
 
     /**
-     * FIX #3: унифицирован путь модели.
-     * Раньше: getExternalFilesDir(null) использовался здесь,
-     * а PublicHuggingFaceModelDownloader также сохранял в getExternalFilesDir(null).
-     * Оба класса теперь единообразно используют getExternalFilesDir(null) ?: filesDir.
+     * Единый метод получения пути к файлу модели.
+     * Используется здесь и должен использоваться во всех местах,
+     * где нужен путь к файлу модели — для консистентности путей.
+     *
+     * Порядок приоритета хранилища:
+     *   1. getExternalFilesDir(null) — основное (не требует разрешений, Scoped Storage)
+     *   2. filesDir — fallback для устройств без внешнего хранилища
      */
     fun getModelFile(model: OfflineModelInfo): File {
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
         return File(modelDir, model.filename)
     }
+
+    /**
+     * Возвращает базовую директорию для хранения моделей.
+     * Используй этот метод в ModelDownloadWorker и других местах
+     * вместо прямого обращения к filesDir/getExternalFilesDir.
+     */
+    fun getModelsBaseDir(): File = context.getExternalFilesDir(null) ?: context.filesDir
 
     fun isModelDownloaded(model: OfflineModelInfo): Boolean {
         val file = getModelFile(model)

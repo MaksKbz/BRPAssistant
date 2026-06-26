@@ -156,6 +156,12 @@ object PublicOfflineModelCatalog {
         // Qwen3 1.7B — LiteRT-LM
         // Источник: https://huggingface.co/litert-community/Qwen3-1.7B
         // Имя файла подтверждено через HF API: Qwen3_1.7B.litertlm (подчёркивание!)
+        //
+        // FIX: minRamGb повышен с 4 до 5.
+        // Модель 1.74 ГБ на диске требует ~2.5–3 ГБ свободной RAM при инференсе.
+        // На устройствах с 4 ГБ физических (≈2.3 ГБ доступных при работающем фоне)
+        // возникал OOM (OutOfMemoryError в нативном слое LiteRT-LM).
+        // 5 ГБ физических = ~3.2 ГБ доступных — безопасный минимум.
         OfflineModelInfo(
             id           = "qwen3_1_7b_litertlm",
             title        = "Qwen3 1.7B • ~1.7 ГБ ✨",
@@ -163,10 +169,10 @@ object PublicOfflineModelCatalog {
             filename     = "Qwen3_1.7B.litertlm",
             license      = "Apache 2.0",
             approxSizeMb = 1740,
-            minRamGb     = 4,
+            minRamGb     = 5,
             promptStyle  = PromptStyle.CHATML,
             format       = ModelFormat.LITERTLM,
-            description  = "~1.7 ГБ. Qwen3 нового поколения с нативным режимом размышлений. Превосходит Qwen 2.5 1.5B по качеству рассуждений. Добавьте /think для глубокого анализа кодов ошибок BRP.",
+            description  = "~1.7 ГБ. Qwen3 нового поколения с нативным режимом размышлений. Добавьте /think для глубокого анализа кодов ошибок BRP. Рекомендуется 5+ ГБ RAM (Snapdragon 778/7s Gen 2 и новее).",
             downloadUrl  = "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3_1.7B.litertlm"
         ),
 
@@ -239,7 +245,10 @@ object PublicOfflineModelCatalog {
      *   12+ ГБ → Qwen3 4B (LiteRT-LM, thinking mode, Tool Use)
      *    8+ ГБ → Phi-4-mini (MediaPipe, стабильный, близко к GPT-уровню)
      *    6+ ГБ → Qwen 2.5 3B (MediaPipe, высокое качество)
-     *    4+ ГБ → Qwen3 1.7B  (LiteRT-LM, новое поколение с /think)
+     *    5+ ГБ → Qwen3 1.7B  (LiteRT-LM, новое поколение с /think)
+     *              FIX: порог поднят с 4 до 5 ГБ — на 4 ГБ устройствах
+     *              (~2.3 ГБ доступных) нативный LiteRT-LM даёт OOM
+     *              при активных фоновых приложениях.
      *    3+ ГБ → Qwen3 0.6B  (LiteRT-LM, новое поколение, лёгкий)
      *    <3 ГБ → SmolLM2 135M (работает везде)
      */
@@ -247,7 +256,7 @@ object PublicOfflineModelCatalog {
         totalRamGb >= 12 -> models.first { it.id == "qwen3_4b_litertlm" }
         totalRamGb >= 8  -> models.first { it.id == "phi4_mini_task" }
         totalRamGb >= 6  -> models.first { it.id == "qwen2_5_3b_task" }
-        totalRamGb >= 4  -> models.first { it.id == "qwen3_1_7b_litertlm" }
+        totalRamGb >= 5  -> models.first { it.id == "qwen3_1_7b_litertlm" }
         totalRamGb >= 3  -> models.first { it.id == "qwen3_0_6b_litertlm" }
         else             -> models.first { it.id == "smollm2_135m_task" }
     }

@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.StatFs
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
@@ -58,17 +59,39 @@ class ModelDownloadWorker @AssistedInject constructor(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val initialUrl = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
         val fileName   = inputData.getString(KEY_FILENAME) ?: return@withContext Result.failure()
+        val approxSizeMb = inputData.getLong(KEY_SIZE, 0L) / (1024 * 1024)
 
         // Показываем foreground уведомление — без этого на Android 12+ краш
         setForeground(getForegroundInfo())
 
-        val outputDir  = File(applicationContext.filesDir, MODEL_DIR)
+        // FIX: исправлен путь хранения модели.
+        // Было: context.filesDir — не совпадал с путём в LlmInferenceEngine
+        //       и PublicHuggingFaceModelDownloader, которые используют
+        //       getExternalFilesDir(null) ?: filesDir.
+        // Стало: тот же приоритет хранилища что и в LlmInferenceEngine.getModelsBaseDir()
+        val outputDir = File(
+            applicationContext.getExternalFilesDir(null) ?: applicationContext.filesDir,
+            MODEL_DIR
+        )
         if (!outputDir.exists()) outputDir.mkdirs()
+
+        // FIX: проверка свободного места до начала загрузки.
+        // ModelDownloadWorker не проверял место в отличие от PublicHuggingFaceModelDownloader.
+        // На устройствах с заполненным хранилищем (32 ГБ, занято 90%) загрузка
+        // 5.7 ГБ модели падала с IOException в середине процесса без понятного сообщения.
+        if (approxSizeMb > 0 && !hasEnoughSpace(outputDir, approxSizeMb)) {
+            return@withContext Result.failure(
+                Data.Builder().putString(
+                    "error",
+                    "Недостаточно места на диске. Нужно ~${approxSizeMb + 200} МБ свободного места."
+                ).build()
+            )
+        }
 
         val outputFile = File(outputDir, fileName)
         val tempFile   = File(outputDir, "$fileName.part")
 
-        Log.d(TAG, "Starting download: $fileName")
+        Log.d(TAG, "Starting download: $fileName to ${outputDir.absolutePath}")
 
         try {
             val directUrl = getDirectDownloadUrl(initialUrl)
@@ -185,7 +208,20 @@ class ModelDownloadWorker @AssistedInject constructor(
             initialUrl
         }
 
-    private suspend fun performDownload(url: String, tempFile: File, fileName: String) {
+    /**
+     * FIX: устранена бесконечная рекурсия при HTTP 416 (Range Not Satisfiable).
+     * Было: performDownload() рекурсивно вызывал сам себя при 416 — если сервер
+     *       стабильно возвращает 416 (CDN-кэш, edge-случай) это приводило к
+     *       StackOverflowError без возможности восстановления.
+     * Стало: параметр retryCount ограничивает повторную попытку одним разом.
+     *        При повторном 416 выбрасывается IOException с понятным сообщением.
+     */
+    private suspend fun performDownload(
+        url: String,
+        tempFile: File,
+        fileName: String,
+        retryCount: Int = 0
+    ) {
         if (tempFile.exists() && tempFile.length() < 1024) tempFile.delete()
         val alreadyDownloaded = if (tempFile.exists()) tempFile.length() else 0L
 
@@ -200,19 +236,31 @@ class ModelDownloadWorker @AssistedInject constructor(
 
         val downloadClient = okHttpClient.newBuilder().followRedirects(true).build()
         downloadClient.newCall(request).execute().use { response ->
-            if (response.code == 416) {
-                tempFile.delete()
-                return performDownload(url, tempFile, fileName)
-            }
-            if (response.code == 401 || response.code == 403) {
-                if (alreadyDownloaded > 0) {
+            when (response.code) {
+                416 -> {
+                    // Range Not Satisfiable: локальный .part файл некорректен
                     tempFile.delete()
-                    return performDownload(url, tempFile, fileName)
+                    if (retryCount < 1) {
+                        // Один повтор: сбрасываем offset и качаем заново
+                        return performDownload(url, tempFile, fileName, retryCount + 1)
+                    } else {
+                        throw IOException("HTTP 416: Range Not Satisfiable после повтора — возможно повреждён .part файл")
+                    }
                 }
-                throw IOException("Access Denied (${response.code})")
+                401, 403 -> {
+                    if (alreadyDownloaded > 0) {
+                        tempFile.delete()
+                        if (retryCount < 1) {
+                            return performDownload(url, tempFile, fileName, retryCount + 1)
+                        }
+                    }
+                    throw IOException("Access Denied (${response.code})")
+                }
+                else -> {
+                    if (!response.isSuccessful && response.code != 206)
+                        throw IOException("Server Error ${response.code}")
+                }
             }
-            if (!response.isSuccessful && response.code != 206)
-                throw IOException("Server Error ${response.code}")
 
             val body = response.body ?: throw IOException("Empty body")
             val total = if (response.code == 206)
@@ -262,6 +310,23 @@ class ModelDownloadWorker @AssistedInject constructor(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Проверяет наличие достаточного места на диске.
+     * В отличие от PublicHuggingFaceModelDownloader, возвращает false при
+     * исключении StatFs — безопаснее для устройств с 32 ГБ заполненным хранилищем.
+     */
+    private fun hasEnoughSpace(dir: File, approxSizeMb: Long): Boolean {
+        return try {
+            val stat = StatFs(dir.path)
+            val availableBytes = stat.availableBlocksLong * stat.blockSizeLong
+            val requiredBytes = (approxSizeMb + 200L) * 1024 * 1024
+            availableBytes > requiredBytes
+        } catch (e: Exception) {
+            Log.w(TAG, "hasEnoughSpace check failed: ${e.message}")
+            false // безопасный дефолт — не начинаем загрузку при неизвестном состоянии
         }
     }
 
