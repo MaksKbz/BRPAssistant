@@ -11,12 +11,19 @@ import com.brp.assistant.data.db.entities.*
  * version 2 — added FaultCode table
  * version 3 — added AccessoryCompatibility, KnowledgeCardFts
  * version 4 — added modelFamily column to KnowledgeCard
- * version 5 — added chat_sessions + chat_messages tables  ← current
+ * version 5 — added chat_sessions + chat_messages tables
+ * version 6 — added vehicleName column to chat_sessions  ← current
  *
  * MIGRATION POLICY:
- * v1→v4 используют fallbackToDestructiveMigration (данные из assets, не потеряем ничего).
- * v4→v5 — полноценная Migration: создаём две новые таблицы, не трогаем старые.
- * Пользовательские данные (история чатов) теперь персистентны и НЕ сносятся при обновлении.
+ * v1–v4 → fallbackToDestructiveMigrationFrom(1,2,3,4):
+ *   данные берутся из assets при каждом запуске, пользовательских записей нет.
+ * v4→v5 — CREATE TABLE chat_sessions + chat_messages (нет потери данных).
+ * v5→v6 — ALTER TABLE chat_sessions ADD COLUMN vehicleName (нет потери данных).
+ *
+ * ⚠️  fallbackToDestructiveMigration() УДАЛЁН начиная с v5.
+ *    Начиная с версии 5 база содержит пользовательские данные (история чатов),
+ *    которые нельзя сносить при обновлении APK. Все последующие изменения схемы
+ *    ОБЯЗАНЫ идти через явные Migration-объекты.
  */
 
 val MIGRATION_4_5 = object : Migration(4, 5) {
@@ -51,6 +58,18 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/**
+ * v5 → v6: добавляем денормализованное поле vehicleName.
+ * ALTER TABLE с DEFAULT NULL безопасен для существующих строк.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "ALTER TABLE chat_sessions ADD COLUMN vehicleName TEXT"
+        )
+    }
+}
+
 @Database(
     entities = [
         BrpModel::class,
@@ -62,7 +81,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         ChatSessionEntity::class,
         ChatMessageEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class BrpDatabase : RoomDatabase() {

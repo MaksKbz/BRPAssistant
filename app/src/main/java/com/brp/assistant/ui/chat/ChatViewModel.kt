@@ -26,6 +26,15 @@ data class OfflineModelUiItem(
     val isDownloaded: Boolean
 )
 
+/** Краткое описание сессии для панели истории на планшете. */
+data class ChatSessionSummary(
+    val id: String,
+    val title: String,
+    val vehicleName: String?,    // «Can-Am Maverick X3» или null
+    val dateLabel: String,       // «Сегодня», «Вчера», «14 июня» …
+    val preview: String          // первые 60 символов первого вопроса
+)
+
 data class ChatState(
     val messages: List<ChatMessage> = emptyList(),
     val isGenerating: Boolean = false,
@@ -34,6 +43,7 @@ data class ChatState(
     val error: String? = null,
     val isModelReady: Boolean = false,
     val currentVehicleId: String? = null,
+    val currentVehicleName: String? = null,
     val currentMode: String? = null,
     // Выбранная LLM для этого чата (null = использовать глобальный провайдер)
     val selectedLlmModelId: String? = null,
@@ -58,7 +68,7 @@ class ChatViewModel @Inject constructor(
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    // ID текущей активной сессии (может быть null пока не отправлено первое сообщение)
+    // ID текущей активной сессии (null пока не отправлено первое сообщение)
     private var activeSessionId: String? = null
 
     init {
@@ -110,10 +120,11 @@ class ChatViewModel @Inject constructor(
             chatSessionDao.observeAllSessions().collect { entities ->
                 val summaries = entities.map { entity ->
                     ChatSessionSummary(
-                        id        = entity.id,
-                        title     = entity.title,
-                        dateLabel = formatDateLabel(entity.updatedAt),
-                        preview   = entity.title.take(60)
+                        id          = entity.id,
+                        title       = entity.title,
+                        vehicleName = entity.vehicleName,
+                        dateLabel   = formatDateLabel(entity.updatedAt),
+                        preview     = entity.title.take(60)
                     )
                 }
                 _state.update { it.copy(sessionHistory = summaries) }
@@ -125,10 +136,6 @@ class ChatViewModel @Inject constructor(
     // Публичные методы управления сессиями
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Загрузить историю сообщений существующей сессии.
-     * Вызывается из ChatHistoryPanel при нажатии на элемент списка.
-     */
     fun loadSession(sessionId: String) {
         viewModelScope.launch {
             val entities = chatSessionDao.getMessages(sessionId)
@@ -142,58 +149,53 @@ class ChatViewModel @Inject constructor(
             activeSessionId = sessionId
             _state.update {
                 it.copy(
-                    messages         = messages,
-                    selectedSessionId = sessionId,
-                    currentVehicleId = session.vehicleId,
-                    currentMode      = session.mode,
-                    isGenerating     = false,
-                    riskLevel        = "low",
-                    requiresEvacuation = false,
-                    error            = null
+                    messages            = messages,
+                    selectedSessionId   = sessionId,
+                    currentVehicleId    = session.vehicleId,
+                    currentVehicleName  = session.vehicleName,
+                    currentMode         = session.mode,
+                    isGenerating        = false,
+                    riskLevel           = "low",
+                    requiresEvacuation  = false,
+                    error               = null
                 )
             }
         }
     }
 
-    /**
-     * Начать новый пустой чат (сброс активной сессии, очистка экрана).
-     * ID сессии будет создан при первом sendMessage.
-     */
-    fun startNewChat(vehicleId: String?, mode: String) {
+    fun startNewChat(vehicleId: String?, vehicleName: String?, mode: String) {
         activeSessionId = null
         _state.update {
             it.copy(
-                messages           = emptyList(),
-                selectedSessionId  = null,
-                isGenerating       = false,
-                riskLevel          = "low",
-                requiresEvacuation = false,
-                error              = null,
-                currentVehicleId   = vehicleId,
-                currentMode        = mode
+                messages            = emptyList(),
+                selectedSessionId   = null,
+                isGenerating        = false,
+                riskLevel           = "low",
+                requiresEvacuation  = false,
+                error               = null,
+                currentVehicleId    = vehicleId,
+                currentVehicleName  = vehicleName,
+                currentMode         = mode
             )
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Существующие методы (без изменений в логике, только расширены)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    fun clearForChat(vehicleId: String?, mode: String) {
+    fun clearForChat(vehicleId: String?, vehicleName: String?, mode: String) {
         val current = _state.value
         val contextChanged = current.currentVehicleId != vehicleId || current.currentMode != mode
         if (contextChanged) {
             activeSessionId = null
             _state.update {
                 it.copy(
-                    messages           = emptyList(),
-                    selectedSessionId  = null,
-                    isGenerating       = false,
-                    riskLevel          = "low",
-                    requiresEvacuation = false,
-                    error              = null,
-                    currentVehicleId   = vehicleId,
-                    currentMode        = mode
+                    messages            = emptyList(),
+                    selectedSessionId   = null,
+                    isGenerating        = false,
+                    riskLevel           = "low",
+                    requiresEvacuation  = false,
+                    error               = null,
+                    currentVehicleId    = vehicleId,
+                    currentVehicleName  = vehicleName,
+                    currentMode         = mode
                 )
             }
         }
@@ -211,7 +213,7 @@ class ChatViewModel @Inject constructor(
         _state.update { it.copy(selectedLlmModelId = null, selectedOnlineProvider = null) }
     }
 
-    fun sendMessage(text: String, mode: String, vehicleId: String?) {
+    fun sendMessage(text: String, mode: String, vehicleId: String?, vehicleName: String? = null) {
         val userMsg = ChatMessage(text, MessageRole.USER)
         _state.update { it.copy(messages = it.messages + userMsg, isGenerating = true, error = null) }
 
@@ -238,7 +240,8 @@ class ChatViewModel @Inject constructor(
             }
 
             // ── Создаём сессию при первом сообщении ─────────────────────────
-            val sessionId = ensureSession(text, vehicleId, mode)
+            val resolvedVehicleName = vehicleName ?: _state.value.currentVehicleName
+            val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
             val history = _state.value.messages
             var assistantContent = ""
@@ -282,7 +285,7 @@ class ChatViewModel @Inject constructor(
                 }
 
                 // ── Сохраняем сообщения в Room после завершения генерации ────
-                persistMessages(sessionId)
+                persistMessages(sessionId, resolvedVehicleName)
 
             } catch (oom: OutOfMemoryError) {
                 val oomMsg = "💾 Модель не поместилась в память устройства. " +
@@ -302,12 +305,12 @@ class ChatViewModel @Inject constructor(
     // Приватные вспомогательные методы
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Гарантирует существование активной сессии.
-     * При первом вызове создаёт новую запись в Room и устанавливает selectedSessionId.
-     * При последующих вызовах возвращает уже существующий ID.
-     */
-    private suspend fun ensureSession(firstMessage: String, vehicleId: String?, mode: String): String {
+    private suspend fun ensureSession(
+        firstMessage: String,
+        vehicleId: String?,
+        vehicleName: String?,
+        mode: String
+    ): String {
         activeSessionId?.let { return it }
 
         val id    = UUID.randomUUID().toString()
@@ -316,12 +319,13 @@ class ChatViewModel @Inject constructor(
 
         chatSessionDao.insertSession(
             ChatSessionEntity(
-                id        = id,
-                title     = title,
-                vehicleId = vehicleId,
-                mode      = mode,
-                createdAt = now,
-                updatedAt = now
+                id          = id,
+                title       = title,
+                vehicleId   = vehicleId,
+                vehicleName = vehicleName,
+                mode        = mode,
+                createdAt   = now,
+                updatedAt   = now
             )
         )
         activeSessionId = id
@@ -329,12 +333,7 @@ class ChatViewModel @Inject constructor(
         return id
     }
 
-    /**
-     * Записывает все текущие сообщения экрана в Room.
-     * Вызывается после каждого завершённого цикла sendMessage.
-     * Использует REPLACE → идемпотентно при повторных вызовах.
-     */
-    private suspend fun persistMessages(sessionId: String) {
+    private suspend fun persistMessages(sessionId: String, vehicleName: String?) {
         val now      = System.currentTimeMillis()
         val messages = _state.value.messages
         val title    = messages.firstOrNull { it.role == MessageRole.USER }?.content
@@ -346,14 +345,15 @@ class ChatViewModel @Inject constructor(
                 sessionId = sessionId,
                 role      = if (msg.role == MessageRole.USER) "user" else "assistant",
                 content   = msg.content,
-                timestamp = now + index  // монотонный timestamp для сортировки
+                timestamp = now + index
             )
         }
         chatSessionDao.insertMessages(entities)
         chatSessionDao.updateSession(
-            id        = sessionId,
-            title     = title,
-            updatedAt = now
+            id          = sessionId,
+            title       = title,
+            vehicleName = vehicleName,
+            updatedAt   = now
         )
     }
 
@@ -368,10 +368,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Форматирует epoch millis в читаемый label для sticky-заголовков истории.
-     * «Сегодня» / «Вчера» / «14 июня» / «14 июня 2025»
-     */
     private fun formatDateLabel(epochMillis: Long): String {
         val cal   = java.util.Calendar.getInstance()
         val today = cal.clone() as java.util.Calendar
@@ -385,25 +381,20 @@ class ChatViewModel @Inject constructor(
         val yesterday  = today.clone() as java.util.Calendar
         yesterday.add(java.util.Calendar.DAY_OF_YEAR, -1)
 
+        val months = listOf(
+            "января","февраля","марта","апреля","мая","июня",
+            "июля","августа","сентября","октября","ноября","декабря"
+        )
+
         return when {
             msgYear == todayYear && msgDay == todayDay ->
                 "Сегодня"
             msgYear == todayYear && msgDay == yesterday.get(java.util.Calendar.DAY_OF_YEAR) ->
                 "Вчера"
-            msgYear == todayYear -> {
-                val months = listOf(
-                    "января","февраля","марта","апреля","мая","июня",
-                    "июля","августа","сентября","октября","ноября","декабря"
-                )
+            msgYear == todayYear ->
                 "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${months[cal.get(java.util.Calendar.MONTH)]}"
-            }
-            else -> {
-                val months = listOf(
-                    "января","февраля","марта","апреля","мая","июня",
-                    "июля","августа","сентября","октября","ноября","декабря"
-                )
+            else ->
                 "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${months[cal.get(java.util.Calendar.MONTH)]} ${cal.get(java.util.Calendar.YEAR)}"
-            }
         }
     }
 

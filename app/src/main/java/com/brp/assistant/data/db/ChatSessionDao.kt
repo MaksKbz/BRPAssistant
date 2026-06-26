@@ -8,35 +8,43 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatSessionDao {
 
-    // ── Sessions ─────────────────────────────────────────────────────────────
+    // ── Сессии ────────────────────────────────────────────────────────────────
 
-    /**
-     * Все сессии, отсортированные по дате последнего обновления (новые сверху).
-     * Flow — LiveData-подобный поток: UI обновится автоматически при изменениях.
-     */
+    /** Реактивный поток всех сессий — UI обновляется автоматически при любом изменении. */
     @Query("SELECT * FROM chat_sessions ORDER BY updatedAt DESC")
     fun observeAllSessions(): Flow<List<ChatSessionEntity>>
 
-    @Query("SELECT * FROM chat_sessions WHERE id = :id")
-    suspend fun getSession(id: String): ChatSessionEntity?
+    @Query("SELECT * FROM chat_sessions WHERE id = :sessionId")
+    suspend fun getSession(sessionId: String): ChatSessionEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: ChatSessionEntity)
 
-    @Query("UPDATE chat_sessions SET updatedAt = :updatedAt, title = :title WHERE id = :id")
-    suspend fun updateSession(id: String, title: String, updatedAt: Long)
+    /**
+     * Обновляет title, vehicleName и updatedAt сессии.
+     * vehicleName может быть null если пользователь не выбрал технику.
+     */
+    @Query(
+        "UPDATE chat_sessions SET title = :title, vehicleName = :vehicleName, updatedAt = :updatedAt WHERE id = :id"
+    )
+    suspend fun updateSession(id: String, title: String, vehicleName: String?, updatedAt: Long)
 
-    @Query("DELETE FROM chat_sessions WHERE id = :id")
-    suspend fun deleteSession(id: String)
+    @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
+    suspend fun deleteSession(sessionId: String)
 
     @Query("DELETE FROM chat_sessions")
-    suspend fun deleteAll()
+    suspend fun deleteAllSessions()
 
-    // ── Messages ─────────────────────────────────────────────────────────────
+    // ── Сообщения ─────────────────────────────────────────────────────────────
 
+    /** Все сообщения сессии в хронологическом порядке. */
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessages(sessionId: String): List<ChatMessageEntity>
 
+    /**
+     * Bulk-insert с REPLACE — идемпотентен при повторных вызовах.
+     * Используется в persistMessages() после каждого ответа LLM.
+     */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)
 
