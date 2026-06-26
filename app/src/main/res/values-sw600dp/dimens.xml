@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Адаптивные размеры для планшетов (sw600dp+) и раскрытых фолдаблов.
+
+    Используется в Compose через dimensionResource() для legacy-View,
+    или напрямую в XML-макетах. В Compose-only экранах
+    адаптивные отступы передаются через WindowWidthSizeClass.
+-->
+<resources>
+    <!-- Горизонтальные отступы контента -->
+    <dimen name="screen_horizontal_padding">32dp</dimen>
+    <dimen name="card_spacing">20dp</dimen>
+    <dimen name="section_spacing">32dp</dimen>
+
+    <!-- Максимальная ширина контента (чтобы не растягивалось на весь экран) -->
+    <dimen name="content_max_width">840dp</dimen>
+
+    <!-- Размеры шрифтов для планшетов -->
+    <dimen name="text_size_body">16sp</dimen>
+    <dimen name="text_size_label">14sp</dimen>
+    <dimen name="text_size_caption">13sp</dimen>
+
+    <!-- Целевая область контента в NavigationRail -->
+    <dimen name="nav_rail_width">80dp</dimen>
+</resources>
