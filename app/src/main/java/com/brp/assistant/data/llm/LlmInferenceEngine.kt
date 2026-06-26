@@ -20,16 +20,10 @@ import javax.inject.Singleton
  *
  *   [ModelFormat.TASK]      → MediaPipe LlmInference API
  *                             Файлы: *.task, *.tflite
- *                             Зависимость: com.google.mediapipe:tasks-genai
  *
  *   [ModelFormat.LITERTLM]  → LiteRtLmEngine
  *                             Файлы: *.litertlm
- *                             Зависимость: com.google.ai.edge.litertlm:litertlm-android
- *                             Даёт доступ к Qwen3, Gemma4 и другим новым моделям
- *                             с поддержкой NPU, Tool Use, мультимодальности.
- *
- * Внешний код (ViewModel, UseCase) работает с этим классом напрямую —
- * детали выбора движка полностью скрыты.
+ *                             NPU, Tool Use, Qwen3, Gemma4
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
@@ -43,20 +37,30 @@ class LlmInferenceEngine @Inject constructor(
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
-        /**
-         * FIX #1: Максимальное время ожидания ответа от MediaPipe.
-         * 120 секунд — достаточно для генерации 1024 токенов даже на Helio G85,
-         * но защищает от бесконечного зависания при нативном дедлоке в JNI.
-         * Если нужно настроить под конкретное железо — меняй здесь.
-         */
+        /** FIX #1: таймаут MediaPipe — 120 секунд, константа для удобной настройки */
         private const val GENERATION_TIMEOUT_MS = 120_000L
 
-        /** Все поддерживаемые расширения — оба движка */
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
     }
 
     // ── MediaPipe движок (TASK) ──────────────────────────────────────────────
     private var mediaPipeInference: LlmInference? = null
+
+    /**
+     * FIX HIGH-1: guard-флаг против двойного close().
+     *
+     * Проблема: closeInternal() вызывается каждый раз внутри initialize() перед
+     * созданием нового движка. При этом liteRtLmEngine.close() вызывался даже если
+     * LiteRT-движок никогда не был активен — это no-op в норме, но при изменении
+     * порядка вызовов (например, destroy() → initialize()) мог привести к двойному
+     * закрытию нативного ресурса и крэшу на JNI-уровне (SIGABRT).
+     *
+     * Решение: флаг isEngineClosed, который:
+     * - выставляется в true при каждом closeInternal()
+     * - проверяется перед liteRtLmEngine.close() — пропускаем повторный вызов
+     * - сбрасывается в false при успешной инициализации нового движка
+     */
+    @Volatile private var isEngineClosed: Boolean = true
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutex = Mutex()
@@ -68,6 +72,23 @@ class LlmInferenceEngine @Inject constructor(
 
     private val _isInitialized = MutableStateFlow(false)
     val isInitializedFlow: StateFlow<Boolean> = _isInitialized.asStateFlow()
+
+    /**
+     * FIX HIGH-2: публичный поток ошибок загрузки кастомных моделей.
+     *
+     * Проблема: loadCustomModels() поглощал все Exception молча (catch { emptyList() }).
+     * Пользователь не узнавал, что его кастомная модель не загрузилась из-за
+     * невалидного JSON — приложение просто показывало пустой список без объяснений.
+     *
+     * Решение: при ошибке парсинга — сообщение пишется в _customModelError.
+     * ModelManagerViewModel подписывается на customModelError и показывает
+     * Snackbar/Banner с конкретным текстом. clearCustomModelError() вызывается
+     * после того как пользователь увидел ошибку.
+     */
+    private val _customModelError = MutableStateFlow<String?>(null)
+    val customModelError: StateFlow<String?> = _customModelError.asStateFlow()
+
+    fun clearCustomModelError() { _customModelError.value = null }
 
     init {
         scope.launch {
@@ -82,7 +103,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Инициализация ───────────────────────────────────────────────────
+    // ── Инициализация ────────────────────────────────────────────────────────
 
     suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -106,7 +127,6 @@ class LlmInferenceEngine @Inject constructor(
                     )
                 }
 
-                // ── Роутинг по формату ─────────────────────────────────
                 val result = when (model.format) {
                     ModelFormat.LITERTLM -> {
                         Log.i(TAG, "Routing to LiteRtLmEngine: ${model.title}")
@@ -122,6 +142,8 @@ class LlmInferenceEngine @Inject constructor(
                     activeModelInfo = model
                     _isInitialized.value = true
                     _activeModelId.value = model.id
+                    // FIX HIGH-1: сбрасываем флаг — движок успешно открыт
+                    isEngineClosed = false
                     settingsRepository.setActiveModelId(model.id)
                 } else {
                     _isInitialized.value = false
@@ -151,24 +173,11 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Генерация ответа ────────────────────────────────────────────────
+    // ── Генерация ответа ─────────────────────────────────────────────────────
 
     /**
-     * Генерирует ответ, прозрачно делегируя активному движку.
-     * Системный промпт передаётся в LiteRT-LM нативно;
-     * MediaPipe получает его как часть уже построенного [prompt].
-     *
-     * FIX #catch-throwable: catch (e: Throwable) вместо catch (e: Exception) —
-     * OutOfMemoryError во время генерации токенов на JNI-слое MediaPipe
-     * является Error, а не Exception, и ранее не перехватывался,
-     * что приводило к крэшу на устройствах с 3 ГБ RAM.
-     *
-     * FIX #1: обёрнут в withTimeout(GENERATION_TIMEOUT_MS).
-     * inference.generateResponse(prompt) — синхронный вызов без таймаута;
-     * на слабых устройствах (Helio G85, MediaTek 700) он мог блокировать
-     * Dispatchers.IO поток на неопределённое время без возможности отмены.
-     * При TimeoutCancellationException пользователь получает понятное сообщение
-     * вместо бесконечного спиннера.
+     * FIX #1 (из PR #2): withTimeout(GENERATION_TIMEOUT_MS) + isActive-check.
+     * FIX #catch-throwable: catch (e: Throwable) перехватывает OutOfMemoryError.
      */
     suspend fun generateResponse(
         prompt: String,
@@ -184,15 +193,9 @@ class LlmInferenceEngine @Inject constructor(
                     ?: return Result.failure(Exception("MediaPipe не инициализирован"))
                 withContext(Dispatchers.IO) {
                     try {
-                        // FIX #1: withTimeout гарантирует, что синхронный JNI-вызов
-                        // не заблокирует поток дольше GENERATION_TIMEOUT_MS.
-                        // При отмене корутины (например, пользователь ушёл с экрана)
-                        // TimeoutCancellationException всплывёт наружу и прервёт генерацию.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             inference.generateResponse(prompt)
                         }
-                        // Проверяем isActive: если корутина была отменена пока JNI
-                        // завершал работу — не шлём устаревший ответ в UI
                         if (!isActive) return@withContext Result.failure(
                             CancellationException("Генерация отменена")
                         )
@@ -204,7 +207,6 @@ class LlmInferenceEngine @Inject constructor(
                         Log.w(TAG, "MediaPipe generation timed out after ${GENERATION_TIMEOUT_MS}ms")
                         Result.failure(RuntimeException(msg, e))
                     } catch (e: Throwable) {
-                        // Перехватываем Throwable (включая OutOfMemoryError и нативные крэши)
                         val userMsg = when (e) {
                             is OutOfMemoryError ->
                                 "Недостаточно памяти для генерации ответа. " +
@@ -219,7 +221,7 @@ class LlmInferenceEngine @Inject constructor(
         }
     }
 
-    // ── Состояние ───────────────────────────────────────────────────────────
+    // ── Состояние ────────────────────────────────────────────────────────────
 
     fun isReady(): Boolean {
         return _isInitialized.value && when (activeModelInfo?.format) {
@@ -233,42 +235,50 @@ class LlmInferenceEngine @Inject constructor(
     fun getActivePromptStyle(): PromptStyle =
         activeModelInfo?.promptStyle ?: PromptStyle.CHATML
 
-    // ── Жизненный цикл ──────────────────────────────────────────────────
+    // ── Жизненный цикл ───────────────────────────────────────────────────────
 
     suspend fun close() = mutex.withLock { closeInternal() }
 
-    /**
-     * FIX #3: раньше destroy() вызывал closeInternal() напрямую, без mutex,
-     * что приводило к race condition если одновременно выполнялся initialize().
-     * Теперь: scope.cancel() прекращает все корутины, затем
-     * runBlocking блокирует поток владельца до получения mutex.
-     */
     fun destroy() {
         scope.cancel()
         @Suppress("BlockingMethodInNonBlockingContext")
         runBlocking {
             mutex.withLock { closeInternal() }
         }
-        liteRtLmEngine.close()
     }
 
+    /**
+     * FIX HIGH-1: guard против двойного close().
+     *
+     * Раньше: каждый вызов closeInternal() безусловно звал liteRtLmEngine.close(),
+     * даже если LiteRT никогда не был активен или уже был закрыт.
+     * Это могло вызвать двойное освобождение нативного ресурса (SIGABRT в JNI).
+     *
+     * Теперь: isEngineClosed == true → пропускаем liteRtLmEngine.close(),
+     * только mediaPipeInference?.close() всегда безопасен (null-safe).
+     * После закрытия выставляем isEngineClosed = true для следующего цикла.
+     */
     private fun closeInternal() {
-        try { mediaPipeInference?.close() } catch (e: Throwable) {}
+        try { mediaPipeInference?.close() } catch (e: Throwable) {
+            Log.w(TAG, "mediaPipeInference.close() threw: ${e.message}")
+        }
         mediaPipeInference = null
-        liteRtLmEngine.close()
+
+        // Закрываем LiteRT только если он был открыт (guard против double-close)
+        if (!isEngineClosed) {
+            try { liteRtLmEngine.close() } catch (e: Throwable) {
+                Log.w(TAG, "liteRtLmEngine.close() threw: ${e.message}")
+            }
+        }
+        isEngineClosed = true
+
         _isInitialized.value = false
         activeModelInfo = null
         _activeModelId.value = null
     }
 
-    // ── Файловые утилиты ──────────────────────────────────────────────────
+    // ── Файловые утилиты ─────────────────────────────────────────────────────
 
-    /**
-     * FIX #3: унифицирован путь модели.
-     * Раньше: getExternalFilesDir(null) использовался здесь,
-     * а PublicHuggingFaceModelDownloader также сохранял в getExternalFilesDir(null).
-     * Оба класса теперь единообразно используют getExternalFilesDir(null) ?: filesDir.
-     */
     fun getModelFile(model: OfflineModelInfo): File {
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
@@ -295,11 +305,27 @@ class LlmInferenceEngine @Inject constructor(
         return PublicOfflineModelCatalog.models.filter { isModelDownloaded(it) }
     }
 
+    /**
+     * FIX HIGH-2: ошибки парсинга JSON кастомных моделей теперь поверхностны.
+     *
+     * Раньше: catch (e: Exception) { emptyList() } — ошибка терялась, пользователь
+     * видел пустой список без объяснений.
+     *
+     * Теперь: ошибка пишется в _customModelError с понятным сообщением.
+     * UI-слой (ModelManagerViewModel) подписывается на customModelError и
+     * показывает Snackbar/Banner с конкретным текстом проблемы.
+     */
     private suspend fun loadCustomModels(): List<OfflineModelInfo> = try {
         val json = settingsRepository.customModelsJson.first() ?: ""
         if (json.isNotEmpty())
             kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
                 .decodeFromString<List<OfflineModelInfo>>(json)
         else emptyList()
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        val msg = "Не удалось загрузить кастомные модели: ${e.message ?: "ошибка парсинга JSON"}.\n" +
+                  "Проверьте формат файла модели или добавьте модель заново."
+        Log.e(TAG, "loadCustomModels failed", e)
+        _customModelError.value = msg
+        emptyList()
+    }
 }
