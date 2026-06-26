@@ -32,8 +32,8 @@ import com.brp.assistant.ui.vehicle.VehicleSelectScreen
 import com.brp.assistant.ui.vehicle.VehicleSelectViewModel
 
 sealed class Screen(val route: String, val label: String) {
+    // FIX: удалён дублирующийся Screen.Models с тем же route "model-manager" — мёртвый код
     data object ModelManager  : Screen("model-manager",  "Настройки ИИ")
-    data object Models        : Screen("model-manager",  "Модели")
     data object Home          : Screen("home",           "Главная")
     data object Situations    : Screen("situations",     "Инструкции")
     data object Maintenance   : Screen("maintenance",    "Регламент")
@@ -268,8 +268,9 @@ private fun NavHostContent(
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
 
+            // FIX: передаём vehicleName вторым аргументом — было compile error (отсутствовал параметр)
             LaunchedEffect(selectedVehicleId, mode) {
-                chatVm.clearForChat(selectedVehicleId, mode)
+                chatVm.clearForChat(selectedVehicleId, selectedVehicleName, mode)
             }
             LaunchedEffect(initialQuery) {
                 if (initialQuery != null && state.messages.isEmpty()) {
@@ -277,9 +278,6 @@ private fun NavHostContent(
                 }
             }
 
-            // FIX: widthSizeClass передан в ChatScreen — двухпанельный layout
-            // на планшетах теперь активируется корректно.
-            // sessionHistory / onSelectSession / onNewChat подключены к chatVm.
             ChatScreen(
                 title                  = when (mode) { "diagnosis" -> "Диагностика"; "accessory" -> "Аксессуары"; else -> "Чат" },
                 messages               = state.messages,
@@ -299,12 +297,12 @@ private fun NavHostContent(
                 onSend                 = { msg -> chatVm.sendMessage(msg, mode, selectedVehicleId) },
                 onNavigate             = { route -> navController.navigate(route) },
                 onBack                 = { navController.popBackStack() },
-                // ── новые параметры планшетного layout ──────────────────────────────────
                 widthSizeClass         = widthSizeClass,
                 sessionHistory         = state.sessionHistory,
                 selectedSessionId      = state.selectedSessionId,
                 onSelectSession        = { id -> chatVm.loadSession(id) },
-                onNewChat              = { chatVm.startNewChat(selectedVehicleId, mode) }
+                // FIX: передаём selectedVehicleName — было compile error (отсутствовал параметр)
+                onNewChat              = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, mode) }
             )
         }
         composable(Screen.Diagnose.route) {

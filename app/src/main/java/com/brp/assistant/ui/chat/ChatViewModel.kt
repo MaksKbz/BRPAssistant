@@ -1,5 +1,7 @@
 package com.brp.assistant.ui.chat
 
+import android.app.ActivityManager
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.brp.assistant.data.db.ChatSessionDao
@@ -15,8 +17,14 @@ import com.brp.assistant.domain.model.RetrievalMode
 import com.brp.assistant.domain.usecase.ChatUseCase
 import com.brp.assistant.domain.usecase.DiagnoseUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
@@ -45,13 +53,11 @@ data class ChatState(
     val currentVehicleId: String? = null,
     val currentVehicleName: String? = null,
     val currentMode: String? = null,
-    // Выбранная LLM для этого чата (null = использовать глобальный провайдер)
     val selectedLlmModelId: String? = null,
     val selectedOnlineProvider: String? = null,
     val allOfflineModels: List<OfflineModelUiItem> = emptyList(),
     val activeOfflineModelId: String? = null,
     val currentOnlineProvider: String = "Gemini",
-    // ── История сессий (для планшетной панели) ──────────────────────────────
     val sessionHistory: List<ChatSessionSummary> = emptyList(),
     val selectedSessionId: String? = null
 )
@@ -62,17 +68,16 @@ class ChatViewModel @Inject constructor(
     private val diagnoseUseCase: DiagnoseUseCase,
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: SettingsRepository,
-    private val chatSessionDao: ChatSessionDao
+    private val chatSessionDao: ChatSessionDao,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    // ID текущей активной сессии (null пока не отправлено первое сообщение)
     private var activeSessionId: String? = null
 
     init {
-        // ── Готовность модели ────────────────────────────────────────────────
         viewModelScope.launch {
             combine(
                 llmEngine.activeModelId,
@@ -90,7 +95,6 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // ── Список офлайн-моделей ────────────────────────────────────────────
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 val items = PublicOfflineModelCatalog.models.map { model ->
@@ -108,14 +112,12 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // ── Провайдер ────────────────────────────────────────────────────────
         viewModelScope.launch {
             settingsRepository.aiProvider.collect { p ->
                 _state.update { it.copy(currentOnlineProvider = p ?: "Gemini") }
             }
         }
 
-        // ── Наблюдаем за историей сессий из Room (Flow — реактивно) ─────────
         viewModelScope.launch {
             chatSessionDao.observeAllSessions().collect { entities ->
                 val summaries = entities.map { entity ->
@@ -131,10 +133,6 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Публичные методы управления сессиями
-    // ─────────────────────────────────────────────────────────────────────────
 
     fun loadSession(sessionId: String) {
         viewModelScope.launch {
@@ -223,11 +221,21 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // ── OOM pre-check ────────────────────────────────────────────────
-            val runtime   = Runtime.getRuntime()
-            val freeMemMb = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / 1_048_576L
-            if (freeMemMb < 256L) {
-                val oomMsg = "⚠️ Недостаточно памяти для генерации (~${freeMemMb} МБ свободно). " +
+            // ── OOM pre-check: двойная проверка — heap JVM + системная RAM ──────
+            // FIX: снижен порог JVM-heap 256→150 МБ (256 вызывал ложные блокировки
+            // на бюджетных устройствах с 3 ГБ RAM)
+            val runtime    = Runtime.getRuntime()
+            val freeHeapMb = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / 1_048_576L
+
+            // FIX: добавлена проверка системной RAM через ActivityManager —
+            // надёжнее heap-check на устройствах где heap растягивается лениво
+            val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memInfo    = ActivityManager.MemoryInfo()
+            actManager.getMemoryInfo(memInfo)
+            val availRamMb = memInfo.availMem / 1_048_576L
+
+            if (freeHeapMb < 150L || availRamMb < 150L || memInfo.lowMemory) {
+                val oomMsg = "⚠️ Недостаточно памяти для генерации (heap: ~${freeHeapMb} МБ, RAM: ~${availRamMb} МБ). " +
                         "Закройте другие приложения и повторите попытку."
                 _state.update {
                     it.copy(
@@ -239,7 +247,6 @@ class ChatViewModel @Inject constructor(
                 return@launch
             }
 
-            // ── Создаём сессию при первом сообщении ─────────────────────────
             val resolvedVehicleName = vehicleName ?: _state.value.currentVehicleName
             val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
@@ -284,7 +291,6 @@ class ChatViewModel @Inject constructor(
                     }
                 }
 
-                // ── Сохраняем сообщения в Room после завершения генерации ────
                 persistMessages(sessionId, resolvedVehicleName)
 
             } catch (oom: OutOfMemoryError) {
@@ -300,10 +306,6 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Приватные вспомогательные методы
-    // ─────────────────────────────────────────────────────────────────────────
 
     private suspend fun ensureSession(
         firstMessage: String,
@@ -368,33 +370,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * FIX: заменён устаревший java.util.Calendar на java.time API.
+     * Calendar — deprecated-стиль; java.time доступен с API 26, minSdk=30 — OK.
+     */
     private fun formatDateLabel(epochMillis: Long): String {
-        val cal   = java.util.Calendar.getInstance()
-        val today = cal.clone() as java.util.Calendar
-        cal.timeInMillis = epochMillis
+        val msgDate   = Instant.ofEpochMilli(epochMillis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+        val today     = LocalDate.now()
+        val yesterday = today.minusDays(1)
 
-        val todayYear  = today.get(java.util.Calendar.YEAR)
-        val todayDay   = today.get(java.util.Calendar.DAY_OF_YEAR)
-        val msgYear    = cal.get(java.util.Calendar.YEAR)
-        val msgDay     = cal.get(java.util.Calendar.DAY_OF_YEAR)
-
-        val yesterday  = today.clone() as java.util.Calendar
-        yesterday.add(java.util.Calendar.DAY_OF_YEAR, -1)
-
-        val months = listOf(
-            "января","февраля","марта","апреля","мая","июня",
-            "июля","августа","сентября","октября","ноября","декабря"
-        )
-
-        return when {
-            msgYear == todayYear && msgDay == todayDay ->
-                "Сегодня"
-            msgYear == todayYear && msgDay == yesterday.get(java.util.Calendar.DAY_OF_YEAR) ->
-                "Вчера"
-            msgYear == todayYear ->
-                "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${months[cal.get(java.util.Calendar.MONTH)]}"
-            else ->
-                "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${months[cal.get(java.util.Calendar.MONTH)]} ${cal.get(java.util.Calendar.YEAR)}"
+        return when (msgDate) {
+            today     -> "Сегодня"
+            yesterday -> "Вчера"
+            else -> {
+                val pattern = if (msgDate.year == today.year) "d MMMM" else "d MMMM yyyy"
+                msgDate.format(DateTimeFormatter.ofPattern(pattern, Locale("ru")))
+            }
         }
     }
 

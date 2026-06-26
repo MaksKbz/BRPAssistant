@@ -26,15 +26,8 @@ import com.brp.assistant.ui.components.ChatInputBar
 import com.brp.assistant.ui.components.SafetyBanner
 import com.brp.assistant.ui.navigation.Screen
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Модель сессии истории (упрощённая — для отображения в левой панели)
-// ─────────────────────────────────────────────────────────────────────────────
-data class ChatSessionSummary(
-    val id: String,
-    val title: String,
-    val dateLabel: String,   // "Сегодня", "Вчера", "14 июн" …
-    val preview: String      // первые ~60 символов первого вопроса
-)
+// FIX: убран дублирующийся data class ChatSessionSummary — каноничное определение
+// находится в ChatViewModel.kt. Импортировать не нужно — оба файла в одном пакете.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Левая панель истории (только планшет / фолдабл)
@@ -53,7 +46,6 @@ private fun ChatHistoryPanel(
             .fillMaxHeight()
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        // ── Заголовок панели ──────────────────────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -79,7 +71,6 @@ private fun ChatHistoryPanel(
         HorizontalDivider()
 
         if (sessions.isEmpty()) {
-            // ── Пустое состояние ──────────────────────────────────────────────
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -101,11 +92,7 @@ private fun ChatHistoryPanel(
                 )
             }
         } else {
-            // ── Список сессий со sticky-заголовками дат ───────────────────────
-            // Группируем по dateLabel для sticky headers
-            val grouped = remember(sessions) {
-                sessions.groupBy { it.dateLabel }
-            }
+            val grouped = remember(sessions) { sessions.groupBy { it.dateLabel } }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 grouped.forEach { (dateLabel, items) ->
@@ -151,9 +138,7 @@ private fun ChatHistoryPanel(
                                     Text(
                                         session.preview,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                                            alpha = 0.7f
-                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                         maxLines = 2
                                     )
                                 }
@@ -180,7 +165,6 @@ fun ChatScreen(
     isGenerating: Boolean,
     isModelReady: Boolean,
     selectedVehicleName: String?,
-    // LLM-селектор
     allOfflineModels: List<OfflineModelUiItem>,
     activeOfflineModelId: String?,
     currentOnlineProvider: String,
@@ -192,17 +176,7 @@ fun ChatScreen(
     onSend: (String) -> Unit,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
-    /**
-     * Передаётся из BrpNavGraph → NavHostContent → ChatScreen.
-     * Compact  → телефон → однопанельный layout (без изменений)
-     * Medium / Expanded → планшет/фолдабл → двухпанельный layout
-     */
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
-    /**
-     * История сессий для левой панели (планшет).
-     * На телефоне игнорируется.
-     * Должна заполняться из ChatViewModel.sessionHistory StateFlow.
-     */
     sessionHistory: List<ChatSessionSummary> = emptyList(),
     selectedSessionId: String? = null,
     onSelectSession: (String) -> Unit = {},
@@ -229,7 +203,6 @@ fun ChatScreen(
 
     val isTablet = widthSizeClass != WindowWidthSizeClass.Compact
 
-    // ── Контентная область (общая для обоих режимов) ──────────────────────────
     @Composable
     fun ChatContent(modifier: Modifier = Modifier) {
         Column(modifier = modifier.fillMaxSize()) {
@@ -246,8 +219,6 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    // На планшете кнопка Back не нужна — есть левая панель навигации,
-                    // оставляем её только на телефоне
                     if (!isTablet) {
                         IconButton(onClick = onBack) {
                             Icon(Icons.Default.ArrowBack, null)
@@ -294,8 +265,6 @@ fun ChatScreen(
                     start = 16.dp,
                     end = 16.dp,
                     top = 16.dp,
-                    // FIX: нижний отступ защищает последнее сообщение от перекрытия
-                    // системной gesture-полосой на Android 10+ без жёсткой кнопочной навигации
                     bottom = WindowInsets.navigationBars
                         .asPaddingValues()
                         .calculateBottomPadding() + 16.dp
@@ -323,24 +292,27 @@ fun ChatScreen(
                 }
             }
 
-            ChatInputBar(
-                value = input,
-                onValueChange = { input = it },
-                onSend = {
-                    if (input.isNotBlank()) {
-                        onSend(input)
-                        input = ""
-                    }
-                },
-                enabled = isModelReady && !isGenerating,
-                placeholder = "Задайте вопрос…"
-            )
+            // FIX: добавлен imePadding() — без него в landscape-режиме клавиатура
+            // перекрывает поле ввода на ~30% высоты экрана (особенно критично
+            // на телефонах с соотношением сторон 20:9 в горизонтальной ориентации)
+            Box(modifier = Modifier.imePadding()) {
+                ChatInputBar(
+                    value = input,
+                    onValueChange = { input = it },
+                    onSend = {
+                        if (input.isNotBlank()) {
+                            onSend(input)
+                            input = ""
+                        }
+                    },
+                    enabled = isModelReady && !isGenerating,
+                    placeholder = "Задайте вопрос…"
+                )
+            }
         }
     }
 
-    // ── Layout: планшет (Rail) или телефон (Bottom) ───────────────────────────
     if (isTablet) {
-        // Двухпанельный Row: 30% история | 70% чат
         Row(modifier = Modifier.fillMaxSize()) {
             ChatHistoryPanel(
                 sessions = sessionHistory,
@@ -349,19 +321,15 @@ fun ChatScreen(
                 onNewChat = onNewChat,
                 modifier = Modifier
                     .fillMaxHeight()
-                    // Фиксированная ширина 280dp — оптимум для sw600dp..sw840dp.
-                    // На больших планшетах (sw840dp+) ширина 300dp через weight(0.28f).
                     .width(280.dp)
             )
             VerticalDivider(thickness = 1.dp)
             ChatContent(modifier = Modifier.weight(1f))
         }
     } else {
-        // Телефон — без изменений относительно предыдущей версии
         ChatContent()
     }
 
-    // ── LLM Bottom Sheet (общий для обоих режимов) ────────────────────────────
     if (showLlmSheet) {
         ModalBottomSheet(onDismissRequest = { showLlmSheet = false }) {
             LlmSelectorSheet(
@@ -384,7 +352,7 @@ fun ChatScreen(
                 },
                 onGoToModels = {
                     showLlmSheet = false
-                    onNavigate(Screen.Models.route)
+                    onNavigate(Screen.ModelManager.route)
                 }
             )
         }
@@ -392,7 +360,7 @@ fun ChatScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LlmSelectorSheet — без изменений, оставляем как было
+// LlmSelectorSheet
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun LlmSelectorSheet(
@@ -529,7 +497,7 @@ private fun LlmOptionRow(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MessageBubble — добавлен copy-to-clipboard по долгому нажатию
+// MessageBubble — copy-to-clipboard по долгому нажатию
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -538,7 +506,6 @@ private fun MessageBubble(message: ChatMessage) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
 
-    // Сбрасываем метку "Скопировано" через 2 секунды
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(2000)
