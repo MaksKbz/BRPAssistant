@@ -30,7 +30,53 @@ class PromptBuilder {
 3. Для аксессуаров указывай SKU и совместимость
 4. Для ремонта давай пошаговые инструкции с предупреждениями безопасности
 5. Если информации недостаточно — рекомендуй обратиться к дилеру BRP"""
+
+        /**
+         * FIX #oom-guard: ограничения контекста для защиты от OOM.
+         *
+         * На Samsung A03 / Redmi 9A (3 ГБ RAM) история из 50+ сообщений
+         * занимала 2–5 МБ в heap, плюс MediaPipe копировал всё в нативную
+         * память при старте инференса — что приводило к OutOfMemoryError.
+         *
+         * MAX_HISTORY_MESSAGES: максимум сообщений из истории в промпте.
+         * MAX_MSG_CHARS: длинные сообщения обрезаются — типичное сообщение
+         *   пользователя редко несёт полезной информации после 500 символов.
+         * MAX_CONTEXT_CHARS: абсолютный потолок символов в блоке истории.
+         */
+        private const val MAX_HISTORY_MESSAGES = 6
+        private const val MAX_MSG_CHARS = 500
+        private const val MAX_CONTEXT_CHARS = 4_000
     }
+
+    // ============================================================
+    // ВСПОМОГАТЕЛЬНЫЕ
+    // ============================================================
+
+    /**
+     * Возвращает безопасный срез истории:
+     * последние MAX_HISTORY_MESSAGES сообщений, каждое обрезано до MAX_MSG_CHARS.
+     * Общий объём не превышает MAX_CONTEXT_CHARS символов.
+     */
+    private fun safeHistory(history: List<ChatMessage>): List<ChatMessage> {
+        val slice = history.takeLast(MAX_HISTORY_MESSAGES)
+        var total = 0
+        val result = mutableListOf<ChatMessage>()
+        for (msg in slice) {
+            val truncated = msg.content.truncate(MAX_MSG_CHARS)
+            val len = truncated.length + 20  // +20 для ролевого префикса
+            if (total + len > MAX_CONTEXT_CHARS) break
+            result.add(msg.copy(content = truncated))
+            total += len
+        }
+        return result
+    }
+
+    /** Обрезает строку до [max] символов с маркером "…" если она длиннее. */
+    private fun String.truncate(max: Int): String =
+        if (length <= max) this else take(max - 1) + "…"
+
+    private fun histBlock(history: List<ChatMessage>): String =
+        safeHistory(history).joinToString("\n") { "${it.role.label}: ${it.content}" }
 
     // ============================================================
     // ДИАГНОСТИКА
@@ -65,8 +111,6 @@ class PromptBuilder {
             }
         }
 
-        val histBlock = history.takeLast(3).joinToString("\n") { "${it.role.label}: ${it.content}" }
-
         val content = """=== РЕЖИМ ДИАГНОСТИКИ ===
 
 $modelCtx
@@ -75,7 +119,7 @@ $modelCtx
 $cardsBlock
 
 ИСТОРИЯ:
-$histBlock
+${histBlock(history)}
 
 КЛИЕНТ: $userMessage"""
 
@@ -108,8 +152,6 @@ $histBlock
             }
         }
 
-        val histBlock = history.takeLast(3).joinToString("\n") { "${it.role.label}: ${it.content}" }
-
         val content = """=== РЕЖИМ ПОДБОРА АКСЕССУАРОВ ===
 
 $modelCtx
@@ -118,7 +160,7 @@ $modelCtx
 $accBlock
 
 ИСТОРИЯ:
-$histBlock
+${histBlock(history)}
 
 КЛИЕНТ: $userMessage
 
@@ -152,8 +194,6 @@ $histBlock
             }
         }
 
-        val histBlock = history.takeLast(2).joinToString("\n") { "${it.role.label}: ${it.content}" }
-
         val content = """=== РЕЖИМ ВЫБОРА МОДЕЛИ ===
 
 КЛИЕНТ: $userMessage
@@ -162,7 +202,7 @@ $histBlock
 $modelBlock
 
 ИСТОРИЯ:
-$histBlock
+${histBlock(history)}
 
 ПРАВИЛА:
 1. Уточни опыт, задачи, бюджет, условия
@@ -185,7 +225,7 @@ $histBlock
         history: List<ChatMessage>,
         style: PromptStyle = PromptStyle.CHATML
     ): String {
-        val isComparison = userMessage.contains("сравни", ignoreCase = true) || 
+        val isComparison = userMessage.contains("сравни", ignoreCase = true) ||
                            userMessage.contains("разница", ignoreCase = true)
 
         val modelCtx = if (selectedModel != null && !isComparison) {
@@ -209,8 +249,6 @@ $histBlock
             "СОВМЕСТИМЫЕ АКСЕССУАРЫ:\n" + accessories.take(2).joinToString("\n") { "- ${it.name} (SKU: ${it.sku})" }
         } else ""
 
-        val histBlock = history.takeLast(4).joinToString("\n") { "${it.role.label}: ${it.content}" }
-
         val content = """=== РЕЖИМ ПЕРСОНАЛЬНОЙ КОНСУЛЬТАЦИИ ===
 
 $modelCtx
@@ -219,7 +257,7 @@ $cardsBlock
 $accBlock
 
 ИСТОРИЯ:
-$histBlock
+${histBlock(history)}
 
 КЛИЕНТ: $userMessage
 
@@ -258,7 +296,6 @@ $histBlock
                 "<|im_start|>system\n$systemMessage<|im_end|>\n<|im_start|>user\n$fullUserMessage<|im_end|>\n<|im_start|>assistant\n"
             }
             PromptStyle.QWEN3 -> {
-                // Добавляем /no_think для Qwen3 чтобы избежать длинных рассуждений
                 "<|im_start|>system\n$systemMessage /no_think<|im_end|>\n<|im_start|>user\n$fullUserMessage<|im_end|>\n<|im_start|>assistant\n"
             }
             PromptStyle.PHI3 -> {
@@ -269,23 +306,34 @@ $histBlock
 
     /**
      * Выбирает релевантные фрагменты из JSON, чтобы не перегружать контекст.
-     * Ищет ключевые слова из вопроса пользователя.
+     *
+     * FIX #maxLines: добавлен лимит maxLines=200.
+     * Большие JSON-каталоги (>1000 строк) раньше проходили целиком через
+     * joinToString перед обрезкой по maxChars — это создавало промежуточную
+     * строку в heap размером до 5 МБ. Теперь relevantLines обрезаются до
+     * maxLines сразу после фильтрации, до финального join.
      */
-    fun selectRelevantJsonContext(fullJson: String, userQuestion: String, maxChars: Int = 10000): String {
+    fun selectRelevantJsonContext(
+        fullJson: String,
+        userQuestion: String,
+        maxChars: Int = 10_000,
+        maxLines: Int = 200
+    ): String {
         if (fullJson.length <= maxChars) return fullJson
 
         val keywords = userQuestion.lowercase().split(Regex("\\P{L}+")).filter { it.length > 3 }
         if (keywords.isEmpty()) return fullJson.take(maxChars)
 
-        // Простой поиск строк, содержащих ключевые слова
         val lines = fullJson.split("\n")
-        val relevantLines = lines.filter { line ->
-            keywords.any { kw -> line.lowercase().contains(kw) }
-        }
+        val relevantLines = lines
+            .filter { line -> keywords.any { kw -> line.lowercase().contains(kw) } }
+            .take(maxLines)  // FIX: обрезаем до maxLines до join
 
         val result = relevantLines.joinToString("\n")
-        return if (result.length > maxChars) result.take(maxChars) 
-               else if (result.isBlank()) fullJson.take(maxChars) 
-               else result
+        return when {
+            result.length > maxChars -> result.take(maxChars)
+            result.isBlank()         -> fullJson.take(maxChars)
+            else                     -> result
+        }
     }
 }
