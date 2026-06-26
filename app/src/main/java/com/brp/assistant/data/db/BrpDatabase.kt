@@ -1,6 +1,8 @@
 package com.brp.assistant.data.db
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.brp.assistant.data.db.entities.*
 
 @Database(
@@ -12,7 +14,7 @@ import com.brp.assistant.data.db.entities.*
         FaultCode::class,
         AccessoryCompatibility::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class BrpDatabase : RoomDatabase() {
@@ -20,6 +22,23 @@ abstract class BrpDatabase : RoomDatabase() {
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
     abstract fun faultCodeDao(): FaultCodeDao
+
+    companion object {
+        /**
+         * Миграция 4 → 5: добавляет поддержку безопасной миграции без потери данных.
+         *
+         * При будущих изменениях схемы:
+         *   1. Увеличь version в @Database
+         *   2. Добавь новый MIGRATION_X_Y в этот companion object
+         *   3. Добавь .addMigrations(MIGRATION_X_Y) в AppModule.kt
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Версия 5: схема без изменений таблиц — только бамп версии.
+                // При добавлении столбца или индекса здесь добавь ALTER TABLE.
+            }
+        }
+    }
 }
 
 @Dao
@@ -125,8 +144,6 @@ interface KnowledgeDao {
     """)
     suspend fun searchFullText(query: String, limit: Int = 5): List<KnowledgeCard>
 
-    // OLD (kept for reference, replaced by getByBrandAndCategory below):
-    // getByBrandOrCategory used OR — returned ALL BRP cards regardless of model
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand OR equipmentType = :category
@@ -134,7 +151,6 @@ interface KnowledgeDao {
     """)
     suspend fun getByBrandOrCategory(brand: String, category: String): List<KnowledgeCard>
 
-    // FIX: strict AND — card must belong to BOTH brand AND equipmentType
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand AND equipmentType = :category
@@ -142,7 +158,6 @@ interface KnowledgeDao {
     """)
     suspend fun getByBrandAndCategory(brand: String, category: String): List<KnowledgeCard>
 
-    // FIX: filter by modelFamily (maps to BrpModel.subcategory, e.g. "Renegade")
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand
