@@ -8,7 +8,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.*
@@ -69,9 +71,13 @@ private val navItems = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrpNavGraph(
-    navController: NavHostController   = rememberNavController(),
-    mainViewModel: MainViewModel       = hiltViewModel(),
-    // Передаётся из MainActivity через calculateWindowSizeClass()
+    navController: NavHostController     = rememberNavController(),
+    mainViewModel: MainViewModel         = hiltViewModel(),
+    /**
+     * Передаётся из MainActivity через calculateWindowSizeClass().
+     * Compact  → телефон  → BottomNavigationBar
+     * Medium / Expanded → планшет/фолдабл → NavigationRail
+     */
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -80,7 +86,9 @@ fun BrpNavGraph(
     val showNav = currentRoute in bottomScreens.map { it.route } ||
             currentRoute?.startsWith("chat/") == true
 
-    // Планшет (≥600dp) и фолдабл в раскрытом состоянии → NavigationRail
+    // Compact  = телефон  (<600dp)
+    // Medium   = планшет в портретном / фолдабл разложенный (600..840dp)
+    // Expanded = планшет в ландшафте / Fold (>840dp)
     val useRail = widthSizeClass != WindowWidthSizeClass.Compact
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
@@ -90,14 +98,25 @@ fun BrpNavGraph(
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
     if (useRail && showNav) {
-        // ── Планшет / фолдабл: NavigationRail слева ───────────────────────────
+        // ── Планшет / фолдабл: NavigationRail слева ────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
             NavigationRail(
-                modifier = Modifier.fillMaxHeight()
+                modifier = Modifier.fillMaxHeight(),
+                header = {
+                    // Лого BRP в шапке рейла
+                    Icon(
+                        imageVector = Icons.Default.TwoWheeler,
+                        contentDescription = "BRP",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(top = 16.dp, bottom = 8.dp)
+                            .size(28.dp)
+                    )
+                }
             ) {
                 Spacer(Modifier.weight(1f))
                 navItems.forEach { item ->
@@ -125,15 +144,17 @@ fun BrpNavGraph(
                 selectedVehicle     = selectedVehicle,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
+                widthSizeClass      = widthSizeClass,
                 modifier            = Modifier
                     .weight(1f)
                     .fillMaxHeight()
             )
         }
     } else {
-        // ── Телефон: BottomNavigationBar ──────────────────────────────────────
+        // ── Телефон: BottomNavigationBar ───────────────────────────────────────────────
         Scaffold(
-            // safeDrawing insets — корректная работа с gesture-bar и вырезами камеры
+            // FIX: safeDrawing insets — BottomNavBar не перекрывается системной
+            // полосой жестовой навигации на Android 10+ gesture mode
             contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 if (showNav) {
@@ -165,6 +186,7 @@ fun BrpNavGraph(
                 selectedVehicle     = selectedVehicle,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
+                widthSizeClass      = widthSizeClass,
                 modifier            = Modifier.padding(innerPadding)
             )
         }
@@ -172,8 +194,11 @@ fun BrpNavGraph(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NavHostContent вынесен отдельно, чтобы не дублировать NavHost
+// NavHostContent ─ отдельный композабл, чтобы не дублировать NavHost
 // между ветками Rail (планшет) и BottomBar (телефон)
+// FIX: добавлен widthSizeClass параметр — теперь передаётся в HomeScreen,
+// чтобы планшетный 2-колоночный layout и QuickDiagnoseStrip реально активировались.
+// Раньше widthSizeClass не проходил дальше BrpNavGraph.
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -185,6 +210,7 @@ private fun NavHostContent(
     selectedVehicle: Any?,
     activeModelName: String?,
     currentTheme: String,
+    widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
     modifier: Modifier = Modifier
 ) {
     NavHost(
@@ -197,6 +223,8 @@ private fun NavHostContent(
                 selectedVehicleName = selectedVehicleName,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
+                // FIX: теперь widthSizeClass действительно передаётся в HomeScreen
+                widthSizeClass      = widthSizeClass,
                 onSetTheme          = { mainViewModel.setAppTheme(it) },
                 onNavigate          = { route -> navController.navigate(route) }
             )
