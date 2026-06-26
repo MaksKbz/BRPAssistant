@@ -1,8 +1,17 @@
 package com.brp.assistant.domain.model
 
+import java.util.UUID
+
 data class ChatMessage(
     val content: String,
     val role: MessageRole,
+    /**
+     * FIX #1: стабильный id генерируется один раз при создании сообщения.
+     * Ранее id создавался заново в persistMessages() при каждом вызове,
+     * что приводило к дублям в БД несмотря на OnConflictStrategy.IGNORE
+     * (каждая вставка имела уникальный UUID — конфликта не возникало).
+     */
+    val id: String = UUID.randomUUID().toString(),
     val timestamp: Long = System.currentTimeMillis(),
     val sources: List<String> = emptyList()
 )

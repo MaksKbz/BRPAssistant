@@ -42,6 +42,22 @@ class LiteRtLmEngine @Inject constructor(
     private var activeModelInfo: OfflineModelInfo? = null
 
     /**
+     * FIX #3: флаг закрытия движка.
+     *
+     * Проблема: при вызове closeInternal() во время активной стриминговой
+     * генерации нативный Engine освобождается, но Flow ещё держит ссылку
+     * на объект Conversation — следующий вызов conversation.generateResponse()
+     * падает с нативным крашем (SIGSEGV или JNI exception).
+     *
+     * Решение: @Volatile флаг isClosed проверяется в начале
+     * generateResponseStreaming(). При закрытии Flow немедленно получает
+     * IllegalStateException вместо нативного краша. После re-инициализации
+     * флаг сбрасывается в false.
+     */
+    @Volatile
+    private var isClosed = false
+
+    /**
      * Инициализирует движок для указанной модели.
      * Пытается запустить на GPU; при неудаче переключается на CPU.
      *
@@ -67,7 +83,6 @@ class LiteRtLmEngine @Inject constructor(
                     )
                 }
 
-                // Пробуем GPU-бэкенд, при ошибке — CPU
                 val engineConfig = tryBuildConfig(modelFile, useGpu = true)
                     ?: tryBuildConfig(modelFile, useGpu = false)
                     ?: return@withContext Result.failure(
@@ -76,6 +91,7 @@ class LiteRtLmEngine @Inject constructor(
 
                 engine = Engine.create(engineConfig)
                 activeModelInfo = model
+                isClosed = false   // сбрасываем флаг после успешной инициализации
                 Log.i(TAG, "LiteRT-LM initialized: ${model.title}")
                 Result.success(Unit)
 
@@ -88,16 +104,19 @@ class LiteRtLmEngine @Inject constructor(
 
     /**
      * Генерирует ответ на промпт в виде потока частичных токенов.
-     * Для совместимости с существующим MediaPipe-кодом принимает [onPartial] callback.
      *
-     * Системный промпт передаётся в [systemPrompt] и встраивается
-     * в ConversationConfig — LiteRT-LM обрабатывает его нативно.
+     * FIX #3: проверяем isClosed перед использованием engine.
+     * Это предотвращает нативный краш при вызове generate() на
+     * уже освобождённом Engine (например, при смене модели во время генерации).
      */
     fun generateResponseStreaming(
         prompt: String,
         systemPrompt: String = "",
         onPartial: (String) -> Unit
     ): Flow<String> = flow {
+        // FIX #3: быстрая проверка до обращения к нативному объекту
+        if (isClosed) throw IllegalStateException("LiteRtLmEngine был закрыт во время генерации")
+
         val eng = engine
             ?: throw IllegalStateException("LiteRtLmEngine не инициализирован")
 
@@ -112,6 +131,9 @@ class LiteRtLmEngine @Inject constructor(
         eng.createConversation(convConfig).use { conversation ->
             val responseFlow = conversation.generateResponse(prompt)
             responseFlow.collect { token ->
+                // Проверяем флаг на каждом токене — closeInternal() мог быть
+                // вызван уже после старта генерации
+                if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
                 onPartial(token)
                 emit(token)
             }
@@ -120,9 +142,8 @@ class LiteRtLmEngine @Inject constructor(
 
     /**
      * Блокирующий вариант генерации — собирает полный ответ.
-     * Используется как fallback там, где Flow не поддерживается.
      *
-     * FIX: catch (e: Exception) → catch (e: Throwable).
+     * catch (e: Exception) → catch (e: Throwable):
      * OutOfMemoryError во время нативного инференса является Error,
      * а не Exception — ранее не перехватывался, что приводило к крэшу
      * на устройствах с 3 ГБ RAM при запуске Qwen3-1.7B и выше.
@@ -149,7 +170,7 @@ class LiteRtLmEngine @Inject constructor(
         }
     }
 
-    fun isReady(): Boolean = engine != null && activeModelInfo != null
+    fun isReady(): Boolean = engine != null && activeModelInfo != null && !isClosed
 
     fun getActiveModelInfo(): OfflineModelInfo? = activeModelInfo
 
@@ -159,12 +180,12 @@ class LiteRtLmEngine @Inject constructor(
     fun close() = closeInternal()
 
     private fun closeInternal() {
+        isClosed = true   // выставляем флаг ДО освобождения объекта
         try { engine?.close() } catch (e: Throwable) { Log.w(TAG, "close error", e) }
         engine = null
         activeModelInfo = null
+        // isClosed остаётся true до следующего успешного initialize()
     }
-
-    // ── Вспомогательные ──────────────────────────────────────────────────────
 
     private fun tryBuildConfig(modelFile: File, useGpu: Boolean): EngineConfig? {
         return try {

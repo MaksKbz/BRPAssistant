@@ -27,9 +27,17 @@ data class ModelManagerState(
     val activeModelId: String? = null,
     val downloadingModelId: String? = null,
     val downloadProgress: Float = 0f,
+    /**
+     * FIX #4: индикация загрузки модели в память.
+     * На устройствах с eMMC 5.1 (старые Xiaomi, Oppo и др.) активация
+     * модели занимает 5–30 секунд. Без этого флага UI «замирает» без
+     * каких-либо визуальных признаков прогресса.
+     */
+    val isActivating: Boolean = false,
+    val activatingModelId: String? = null,
     val error: String? = null,
     val geminiApiKey: String? = null,
-    val groqApiKey: String? = null,  // FIX: was grokApiKey
+    val groqApiKey: String? = null,
     val aiProvider: String = "Gemini",
     val aiModelName: String = "gemini-1.5-flash",
     val aiSystemPrompt: String = "",
@@ -66,8 +74,8 @@ class ModelManagerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.groqApiKey.collect { key ->  // FIX: was grokApiKey
-                _state.update { it.copy(groqApiKey = key) }  // FIX: was grokApiKey
+            settingsRepository.groqApiKey.collect { key ->
+                _state.update { it.copy(groqApiKey = key) }
             }
         }
         viewModelScope.launch {
@@ -133,14 +141,27 @@ class ModelManagerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * FIX #4: выставляем isActivating = true перед initialize() и сбрасываем
+     * после. UI может подписаться на это поле и показать CircularProgressIndicator
+     * или заблокировать кнопку активации на время загрузки модели в память.
+     */
     fun activateModel(model: OfflineModelInfo) {
         if (activateJob?.isActive == true) return
         activateJob = viewModelScope.launch {
+            _state.update { it.copy(isActivating = true, activatingModelId = model.id, error = null) }
             val result = llmEngine.initialize(model)
             if (result.isSuccess) {
+                _state.update { it.copy(isActivating = false, activatingModelId = null) }
                 refreshModels()
             } else {
-                _state.update { it.copy(error = result.exceptionOrNull()?.message ?: "Ошибка активации") }
+                _state.update {
+                    it.copy(
+                        isActivating      = false,
+                        activatingModelId = null,
+                        error             = result.exceptionOrNull()?.message ?: "Ошибка активации"
+                    )
+                }
             }
         }
     }
@@ -180,7 +201,7 @@ class ModelManagerViewModel @Inject constructor(
             val result = remoteLlm.validateKey(_state.value.aiProvider, trimmedKey, _state.value.aiModelName)
             if (result.isSuccess) {
                 if (_state.value.aiProvider == "Gemini") settingsRepository.setGeminiApiKey(trimmedKey)
-                else settingsRepository.setGroqApiKey(trimmedKey)  // FIX: was setGrokApiKey
+                else settingsRepository.setGroqApiKey(trimmedKey)
                 _state.update { it.copy(isValidating = false, validationResult = "SUCCESS") }
             } else {
                 _state.update { it.copy(isValidating = false, validationResult = result.exceptionOrNull()?.message ?: "ERROR") }

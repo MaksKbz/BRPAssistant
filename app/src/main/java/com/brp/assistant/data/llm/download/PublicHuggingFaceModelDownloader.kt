@@ -44,18 +44,10 @@ sealed class ModelDownloadState {
 @Singleton
 class PublicHuggingFaceModelDownloader @Inject constructor(
     @ApplicationContext private val context: Context,
-    /**
-     * FIX: ранее создавался собственный OkHttpClient внутри класса,
-     * полностью игнорируя синглтон из AppModule.
-     * Теперь принимаем baseClient из DI и создаём дочерний клиент
-     * через .newBuilder() — без выделения нового thread/connection pool.
-     */
     baseClient: OkHttpClient
 ) {
-    // Мимикрия под браузер для обхода блокировок и корректной работы CDN
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    // Дочерний клиент: наследует таймауты из синглтона, добавляет только followRedirects=true
     private val client: OkHttpClient = baseClient.newBuilder()
         .followRedirects(true)
         .followSslRedirects(true)
@@ -132,7 +124,15 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             finalUrl += if (finalUrl.contains("?")) "&download=true" else "?download=true"
         }
 
-        val alreadyDownloaded = if (tempFile.exists()) tempFile.length() else 0L
+        /**
+         * FIX #2: alreadyDownloaded вычисляется до запроса, чтобы отправить
+         * Range-заголовок. НО: если сервер ответит 200 OK (а не 206 Partial),
+         * значит возобновление не поддерживается — в handleStream() мы обнулим
+         * смещение и удалим .part-файл. Ранее alreadyDownloaded передавался
+         * в handleStream как «уже загружено», что приводило к дозаписи
+         * байт поверх начала файла и его повреждению.
+         */
+        val partialBytes = if (tempFile.exists()) tempFile.length() else 0L
 
         Log.d(TAG, "Requesting model from: $finalUrl")
 
@@ -145,8 +145,8 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         if (finalUrl.contains("huggingface.co")) {
             requestBuilder.header("Referer", "https://huggingface.co/")
         }
-        if (alreadyDownloaded > 0) {
-            requestBuilder.header("Range", "bytes=$alreadyDownloaded-")
+        if (partialBytes > 0) {
+            requestBuilder.header("Range", "bytes=$partialBytes-")
         }
 
         val request = requestBuilder.build()
@@ -171,7 +171,10 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                 throw IOException("Сервер вернул HTML-страницу вместо файла.")
             }
 
-            handleStream(model, response, tempFile, outFile, alreadyDownloaded).collect { emit(it) }
+            // FIX #2: передаём partialBytes только если сервер подтвердил resumable (206).
+            // При 200 OK — передаём 0, handleStream удалит .part и начнёт с нуля.
+            val resumeOffset = if (response.code == 206) partialBytes else 0L
+            handleStream(model, response, tempFile, outFile, resumeOffset).collect { emit(it) }
         } finally {
             response.close()
         }

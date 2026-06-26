@@ -66,7 +66,6 @@ class ChatViewModel @Inject constructor(
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: SettingsRepository,
     private val chatSessionDao: ChatSessionDao,
-    /** FIX #5: вместо @ApplicationContext + прямых вызовов ActivityManager */
     private val deviceCapability: DeviceCapabilityProvider
 ) : ViewModel() {
 
@@ -145,6 +144,7 @@ class ChatViewModel @Inject constructor(
             val session  = chatSessionDao.getSession(sessionId) ?: return@launch
             val messages = entities.map { e ->
                 ChatMessage(
+                    id      = e.id,
                     content = e.content,
                     role    = if (e.role == "user") MessageRole.USER else MessageRole.ASSISTANT
                 )
@@ -218,17 +218,19 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(text: String, mode: String, vehicleId: String?, vehicleName: String? = null) {
         // FIX #3: отменяем предыдущую генерацию, если она ещё идёт.
-        // Это предотвращает race condition при двойном нажатии «Отправить»
-        // (особенно актуально на планшете с физической клавиатурой).
         generationJob?.cancel()
 
-        val userMsg = ChatMessage(text, MessageRole.USER)
+        val userMsg = ChatMessage(content = text, role = MessageRole.USER)
         _state.update { it.copy(messages = it.messages + userMsg, isGenerating = true, error = null) }
 
-        val effectiveModelId: String? = when {
-            _state.value.selectedLlmModelId != null -> _state.value.selectedLlmModelId
-            else -> vehicleId
-        }
+        /**
+         * FIX #6: убран vehicleId как fallback для effectiveModelId.
+         * vehicleId — идентификатор техники (например "can-am-outlander-500"),
+         * а не LLM-модели. Его передача в движок вызывала непредсказуемое
+         * поведение. Если пользователь не выбрал модель явно — передаём null,
+         * и движок сам выбирает текущую активную модель.
+         */
+        val effectiveModelId: String? = _state.value.selectedLlmModelId
 
         generationJob = viewModelScope.launch {
             // FIX #5: OOM pre-check — через DeviceCapabilityProvider, без ActivityManager в VM
@@ -240,7 +242,7 @@ class ChatViewModel @Inject constructor(
                     it.copy(
                         isGenerating = false,
                         error        = oomMsg,
-                        messages     = it.messages + ChatMessage(oomMsg, MessageRole.ASSISTANT)
+                        messages     = it.messages + ChatMessage(content = oomMsg, role = MessageRole.ASSISTANT)
                     )
                 }
                 return@launch
@@ -251,7 +253,7 @@ class ChatViewModel @Inject constructor(
 
             val history = _state.value.messages
             var assistantContent = ""
-            val assistantMsg = ChatMessage("", MessageRole.ASSISTANT)
+            val assistantMsg = ChatMessage(content = "", role = MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }
 
             try {
@@ -332,7 +334,12 @@ class ChatViewModel @Inject constructor(
         return id
     }
 
-    /** FIX #3: дельта-сохранение — только последние 2 сообщения, не вся сессия */
+    /**
+     * FIX #1: использует стабильный msg.id из ChatMessage вместо генерации
+     * нового UUID. ChatSessionDao.insertMessage использует OnConflictStrategy.IGNORE,
+     * поэтому повторный вызов persistMessages для одной сессии безопасен —
+     * уже сохранённые сообщения (с тем же id) будут проигнорированы.
+     */
     private suspend fun persistMessages(sessionId: String, vehicleName: String?) {
         val now      = System.currentTimeMillis()
         val messages = _state.value.messages
@@ -342,11 +349,11 @@ class ChatViewModel @Inject constructor(
         lastTwo.forEach { msg ->
             chatSessionDao.insertMessage(
                 ChatMessageEntity(
-                    id        = UUID.randomUUID().toString(),
+                    id        = msg.id,   // стабильный id из ChatMessage
                     sessionId = sessionId,
                     role      = if (msg.role == MessageRole.USER) "user" else "assistant",
                     content   = msg.content,
-                    timestamp = now
+                    timestamp = msg.timestamp
                 )
             )
         }
