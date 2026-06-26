@@ -24,6 +24,11 @@ import com.brp.assistant.data.db.entities.*
  *    Начиная с версии 5 база содержит пользовательские данные (история чатов),
  *    которые нельзя сносить при обновлении APK. Все последующие изменения схемы
  *    ОБЯЗАНЫ идти через явные Migration-объекты.
+ *
+ * exportSchema = true:
+ *    Room генерирует JSON-снимки схемы в app/schemas/ при каждом ksp-прогоне.
+ *    Снимки версионируются в git — это позволяет Room верифицировать
+ *    Migration на этапе компиляции, а не в runtime у пользователей.
  */
 
 val MIGRATION_4_5 = object : Migration(4, 5) {
@@ -82,7 +87,7 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         ChatMessageEntity::class
     ],
     version = 6,
-    exportSchema = false
+    exportSchema = true  // FIX: false → true; Room теперь верифицирует Migration на этапе компиляции
 )
 abstract class BrpDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao

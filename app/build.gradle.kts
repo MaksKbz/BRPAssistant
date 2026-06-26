@@ -15,8 +15,8 @@ android {
         applicationId = "com.brp.assistant"
         minSdk = 30
         targetSdk = 35
-        versionCode = 24
-        versionName = "2.3.0"
+        versionCode = 25
+        versionName = "2.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -55,6 +55,13 @@ android {
             useLegacyPackaging = true
         }
     }
+}
+
+// Room schema export: JSON-снимки схемы сохраняются в app/schemas/
+// и версионируются в git. Room верифицирует Migration на этапе
+// компиляции — ошибки обнаруживаются до попадания в руки пользователей.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
