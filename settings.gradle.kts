@@ -19,6 +19,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // LiteRT-LM: com.google.ai.edge.litertlm:litertlm-android
+        maven { url = uri("https://dl.google.com/dl/android/maven2") }
+        // llmedge: io.github.aatricks:llmedge
+        maven { url = uri("https://jitpack.io") }
+        maven { url = uri("https://maven.pkg.github.com/aatricks/llmedge") }
     }
 }
 
