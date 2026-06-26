@@ -1,52 +1,69 @@
 package com.brp.assistant.domain.model
 
 /**
- * Единый sealed-враппер для всех операций LLM-движков.
+ * Единый sealed wrapper для результата LLM-генерации.
  *
- * Используйте вместо разрозненных Result<T>, Exception и необработанных OOM-крэшей.
- * Все ViewModel должны обрабатывать результат через этот класс.
+ * Заменяет прокидывание сырых исключений из MediaPipe / LiteRT / RemoteLlmEngine
+ * типизированным ответом — UI-слой получает готовый к показу объект.
  *
- * [Loading]  — операция в процессе, можно передать частичный [partial] ответ
- * [Success]  — ответ готов, содержит [data]
- * [Error]    — обычная ошибка LLM-движка, [message] готов к показу пользователю
- * [OomError] — недостаточно памяти, [usedMb]/[availMb] для диагностики
- * [Idle]     — начальное состояние, ничего не запущено
+ * Используется как тип возврата в [ChatViewModel.sendMessage] и
+ * прокидывается в [ChatState.engineResult] для отображения точных статусов.
  */
-sealed class EngineResultState<out T> {
+sealed class EngineResultState {
 
-    data object Idle : EngineResultState<Nothing>()
+    /** Успешно сгенерированный или частичный стриминговый ответ. */
+    data class Success(
+        val text: String,
+        /** true — промежуточный чанк стриминга, false — финальный ответ */
+        val isPartial: Boolean = false,
+        /** Идентификатор движка ("mediapipe", "litert", "gemini", "groq", "ollama") */
+        val engineId: String = ""
+    ) : EngineResultState()
 
-    data class Loading<T>(
-        val partial: String = ""
-    ) : EngineResultState<T>()
-
-    data class Success<T>(
-        val data: T
-    ) : EngineResultState<T>()
-
+    /** Обобщённая ошибка генерации — не OOM. */
     data class Error(
         val message: String,
         val cause: Throwable? = null
-    ) : EngineResultState<Nothing>()
+    ) : EngineResultState() {
 
-    /**
-     * Отдельный подкласс для OOM — позволяет UI предложить
-     * пользователю переключиться на легкую модель или закрыть фоновые задачи.
-     */
-    data class OomError(
-        val usedMb: Long = 0L,
-        val availMb: Long = 0L
-    ) : EngineResultState<Nothing>() {
-        val message: String get() =
-            "Недостаточно памяти (исп. ${usedMb} МБ, доступ. ${availMb} МБ). " +
-            "Попробуйте переключиться на модель поменьше или освободить RAM."
+        /**
+         * Специализация для OutOfMemoryError:
+         * содержит подсказку о выборе более лёгкой модели.
+         */
+        data class OOM(
+            val heapMb: Int,
+            val ramMb: Int
+        ) : EngineResultState() {
+            val userMessage: String
+                get() = "💾 Модель не поместилась в память устройства. " +
+                        "Доступно heap: ~${heapMb} МБ, RAM: ~${ramMb} МБ. " +
+                        "Попробуйте более лёгкую модель (≤1.5B) или перезапустите приложение."
+        }
     }
-}
 
-/** Краткий helper: создаёт OomError с данными Runtime.getRuntime() */
-fun EngineResultState.OomError.Companion.capture(): EngineResultState.OomError {
-    val rt = Runtime.getRuntime()
-    val usedMb  = (rt.totalMemory() - rt.freeMemory()) / 1_048_576L
-    val availMb = rt.maxMemory() / 1_048_576L
-    return EngineResultState.OomError(usedMb, availMb)
+    /** Состояние «генерация в процессе» — используется для индикатора загрузки. */
+    object Loading : EngineResultState()
+
+    // ── Фабричные методы ────────────────────────────────────────────────────────
+    companion object {
+        /** Создать из произвольного Throwable — автоматически определяет OOM. */
+        fun from(
+            throwable: Throwable,
+            heapMb: Int = 0,
+            ramMb: Int = 0
+        ): EngineResultState = when (throwable) {
+            is OutOfMemoryError -> Error.OOM(heapMb, ramMb)
+            else                -> Error(throwable.message ?: "Неизвестная ошибка", throwable)
+        }
+
+        /** Фабрика для промежуточного стримингового чанка. */
+        fun loading(): Loading = Loading
+
+        /** Фабрика для успешного ответа. */
+        fun success(text: String, engineId: String = "", isPartial: Boolean = false): Success =
+            Success(text, isPartial, engineId)
+
+        /** Фабрика для ошибки без Throwable (текстовое сообщение). */
+        fun error(message: String): Error = Error(message)
+    }
 }

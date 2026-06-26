@@ -2,6 +2,7 @@ package com.brp.assistant.data.repository
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -36,15 +37,17 @@ class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     // ── DataStore keys (неконфиденциальные настройки) ─────────────────────────
-    private val ACTIVE_MODEL_ID     = stringPreferencesKey("active_model_id")
-    private val SELECTED_VEHICLE_ID = stringPreferencesKey("selected_vehicle_id")
-    private val CUSTOM_MODELS_JSON  = stringPreferencesKey("custom_models_json")
-    private val AI_PROVIDER         = stringPreferencesKey("ai_provider")
-    private val AI_MODEL_NAME       = stringPreferencesKey("ai_model_name")
-    private val AI_SYSTEM_PROMPT    = stringPreferencesKey("ai_system_prompt")
-    private val AI_TEMPERATURE      = floatPreferencesKey("ai_temperature")
-    private val PURCHASE_DATE       = longPreferencesKey("purchase_date")
-    private val APP_THEME           = stringPreferencesKey("app_theme")
+    private val ACTIVE_MODEL_ID       = stringPreferencesKey("active_model_id")
+    private val SELECTED_VEHICLE_ID   = stringPreferencesKey("selected_vehicle_id")
+    private val CUSTOM_MODELS_JSON    = stringPreferencesKey("custom_models_json")
+    private val AI_PROVIDER           = stringPreferencesKey("ai_provider")
+    private val AI_MODEL_NAME         = stringPreferencesKey("ai_model_name")
+    private val AI_SYSTEM_PROMPT      = stringPreferencesKey("ai_system_prompt")
+    private val AI_TEMPERATURE        = floatPreferencesKey("ai_temperature")
+    private val PURCHASE_DATE         = longPreferencesKey("purchase_date")
+    private val APP_THEME             = stringPreferencesKey("app_theme")
+    /** TODO (PR#1): флаг первого запуска — используется в BrpNavGraph для показа OnboardingScreen */
+    private val ONBOARDING_COMPLETED  = booleanPreferencesKey("onboarding_completed")
 
     // ── EncryptedSharedPreferences (только для API-ключей) ─────────────────
     private companion object {
@@ -96,6 +99,14 @@ class SettingsRepository @Inject constructor(
     val aiTemperature: Flow<Float> = context.dataStore.data.map { it[AI_TEMPERATURE] ?: 0.7f }
     val purchaseDate: Flow<Long?> = context.dataStore.data.map { it[PURCHASE_DATE] }
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "System" }
+    /**
+     * Флаг завершения онбординга.
+     * false (default) — первый запуск, показываем OnboardingScreen.
+     * true  — онбординг уже пройден, переходим сразу на Home.
+     */
+    val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map {
+        it[ONBOARDING_COMPLETED] ?: false
+    }
 
     // ── API ключи — запись в EncryptedSharedPreferences + обновление StateFlow ────────
     suspend fun setGeminiApiKey(key: String?) = withContext(Dispatchers.IO) {
@@ -159,5 +170,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setAppTheme(theme: String) {
         context.dataStore.edit { it[APP_THEME] = theme }
+    }
+
+    /** Вызывается из OnboardingScreen по нажатию «Начать» или «Пропустить». */
+    suspend fun setOnboardingCompleted(completed: Boolean = true) {
+        context.dataStore.edit { it[ONBOARDING_COMPLETED] = completed }
     }
 }

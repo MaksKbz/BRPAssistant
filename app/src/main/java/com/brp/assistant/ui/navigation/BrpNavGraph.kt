@@ -28,6 +28,7 @@ import com.brp.assistant.ui.diagnose.DiagnoseScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
 import com.brp.assistant.ui.model.ModelManagerViewModel
+import com.brp.assistant.ui.onboarding.OnboardingScreen
 import com.brp.assistant.ui.situations.SituationsScreen
 import com.brp.assistant.ui.situations.SituationsViewModel
 import com.brp.assistant.ui.maintenance.MaintenanceScreen
@@ -36,6 +37,8 @@ import com.brp.assistant.ui.vehicle.VehicleSelectScreen
 import com.brp.assistant.ui.vehicle.VehicleSelectViewModel
 
 sealed class Screen(val route: String, val label: String) {
+    /** TODO (PR#1): OnboardingScreen — маршрут первого запуска */
+    data object Onboarding    : Screen("onboarding",     "Добро пожаловать")
     data object ModelManager  : Screen("model-manager",  "Настройки ИИ")
     data object Home          : Screen("home",           "Главная")
     data object Situations    : Screen("situations",     "Инструкции")
@@ -87,6 +90,16 @@ fun BrpNavGraph(
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
+    /**
+     * TODO (PR#1): onboardingCompleted — управляет startDestination.
+     * initialValue = true → пока DataStore не ответил, не показываем онбординг.
+     * Как только DataStore вернёт false → NavHost перерисуется с Onboarding как старт.
+     */
+    val onboardingCompleted by mainViewModel.onboardingCompleted.collectAsStateWithLifecycle()
+
+    // startDestination зависит от флага онбординга
+    val startDestination = if (onboardingCompleted) Screen.Home.route else Screen.Onboarding.route
+
     when {
         // ── EXPANDED (планшеты ≥840dp): постоянный NavigationDrawer + панель сессий ───
         widthSizeClass == WindowWidthSizeClass.Expanded && showNav -> {
@@ -122,6 +135,7 @@ fun BrpNavGraph(
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
                     widthSizeClass      = widthSizeClass,
+                    startDestination    = startDestination,
                     modifier            = Modifier.weight(1f).fillMaxHeight()
                 )
             }
@@ -161,6 +175,7 @@ fun BrpNavGraph(
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
                     widthSizeClass      = widthSizeClass,
+                    startDestination    = startDestination,
                     modifier            = Modifier.padding(innerPadding)
                 )
             }
@@ -196,10 +211,12 @@ private fun ExpandedLayout(
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass
 ) {
-    // Получаем сессии из ChatViewModel только когда в chat/-маршруте
     val isChatRoute = currentRoute?.startsWith("chat/") == true
     val chatVm: ChatViewModel? = if (isChatRoute) hiltViewModel() else null
     val chatState = chatVm?.state?.collectAsStateWithLifecycle()
+
+    val onboardingCompleted by mainViewModel.onboardingCompleted.collectAsStateWithLifecycle()
+    val startDestination = if (onboardingCompleted) Screen.Home.route else Screen.Onboarding.route
 
     Row(
         modifier = Modifier
@@ -212,7 +229,6 @@ private fun ExpandedLayout(
                 .width(240.dp)
                 .fillMaxHeight()
         ) {
-            // Шапка дравера
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -236,7 +252,6 @@ private fun ExpandedLayout(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
 
-            // Навигационные пункты
             navItems.forEach { item ->
                 val selected = currentRoute?.startsWith(item.screen.route) == true
                 NavigationDrawerItem(
@@ -256,7 +271,6 @@ private fun ExpandedLayout(
 
             Spacer(Modifier.weight(1f))
 
-            // Footer: техника + модель
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Column(
                 modifier = Modifier
@@ -316,7 +330,6 @@ private fun ExpandedLayout(
                         .fillMaxSize()
                         .padding(8.dp)
                 ) {
-                    // Кнопка "Новый чат"
                     OutlinedButton(
                         onClick  = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, "both") },
                         modifier = Modifier.fillMaxWidth()
@@ -386,7 +399,6 @@ private fun ExpandedLayout(
             }
         }
 
-        // ── Основной контент ─────────────────────────────────────────────────
         NavHostContent(
             navController       = navController,
             mainViewModel       = mainViewModel,
@@ -396,6 +408,7 @@ private fun ExpandedLayout(
             activeModelName     = activeModelName,
             currentTheme        = currentTheme,
             widthSizeClass      = widthSizeClass,
+            startDestination    = startDestination,
             modifier            = Modifier.weight(1f).fillMaxHeight()
         )
     }
@@ -450,13 +463,26 @@ private fun NavHostContent(
     activeModelName: String?,
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
+    startDestination: String = Screen.Home.route,
     modifier: Modifier = Modifier
 ) {
     NavHost(
         navController    = navController,
-        startDestination = Screen.Home.route,
+        startDestination = startDestination,
         modifier         = modifier
     ) {
+        // ── TODO (PR#1): OnboardingScreen — первый запуск ──────────────────────────
+        composable(Screen.Onboarding.route) {
+            OnboardingScreen(
+                widthSizeClass = widthSizeClass,
+                onComplete     = {
+                    mainViewModel.completeOnboarding()
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.Onboarding.route) { inclusive = true }
+                    }
+                }
+            )
+        }
         composable(Screen.Home.route) {
             HomeScreen(
                 selectedVehicleName = selectedVehicleName,

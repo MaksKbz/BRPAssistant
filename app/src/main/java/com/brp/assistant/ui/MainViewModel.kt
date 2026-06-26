@@ -9,8 +9,10 @@ import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.ModelRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -38,6 +40,22 @@ class MainViewModel @Inject constructor(
 
     private val _appTheme = MutableStateFlow("System")
     val appTheme: StateFlow<String> = _appTheme.asStateFlow()
+
+    /**
+     * TODO (PR#1): флаг онбординга.
+     * BrpNavGraph подписывается на этот поток и определяет startDestination:
+     *   false → Screen.Onboarding (первый запуск)
+     *   true  → Screen.Home (обычный запуск)
+     *
+     * WhileSubscribed(5_000) — поток живёт 5с после последнего подписчика,
+     * что предотвращает лишнюю эмиссию при rotate/split-screen.
+     */
+    val onboardingCompleted: StateFlow<Boolean> = settingsRepository.onboardingCompleted
+        .stateIn(
+            scope            = viewModelScope,
+            started          = SharingStarted.WhileSubscribed(5_000),
+            initialValue     = true  // true пока DataStore не ответил → не мигаем онбордингом
+        )
 
     init {
         viewModelScope.launch {
@@ -91,8 +109,6 @@ class MainViewModel @Inject constructor(
      */
     fun selectVehicle(id: String, name: String) {
         viewModelScope.launch {
-            // FIX #2: добавлен вызов settingsRepository, чтобы выбортехники
-            // переживал перезапуск. StateFlow обновится автоматически через collect
             settingsRepository.setSelectedVehicleId(id)
             try {
                 _selectedVehicle.value = modelRepository.getById(id)
@@ -105,6 +121,13 @@ class MainViewModel @Inject constructor(
     fun setAppTheme(theme: String) {
         viewModelScope.launch {
             settingsRepository.setAppTheme(theme)
+        }
+    }
+
+    /** Вызывается из OnboardingScreen при нажатии «Начать» или «Пропустить». */
+    fun completeOnboarding() {
+        viewModelScope.launch {
+            settingsRepository.setOnboardingCompleted(true)
         }
     }
 }
