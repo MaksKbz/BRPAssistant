@@ -15,8 +15,8 @@ android {
         applicationId = "com.brp.assistant"
         minSdk = 30
         targetSdk = 35
-        versionCode = 23
-        versionName = "2.2.0"
+        versionCode = 24
+        versionName = "2.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -93,6 +93,10 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
+    // Adaptive layout — WindowSizeClass + Window
+    implementation(libs.androidx.material3.window.size)
+    implementation(libs.androidx.window)
+
     // ── LLM Engines ─────────────────────────────────────────────────────────────────────
 
     // Движок 1: MediaPipe LlmInference — поддерживает .task файлы
@@ -102,8 +106,7 @@ dependencies {
     // Документация: https://developers.google.com/edge/litert-lm/android
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.1.1")
 
-    // Устаревший движок (llmedge) — оставлен для совместимости
-    implementation("io.github.aatricks:llmedge:0.4.0beta")
+    // llmedge удалён — устаревший beta-движок с нестабильным API
 
     // ── Coroutines ──────────────────────────────────────────────────────────────────────
     implementation(libs.kotlinx.coroutines.android)
@@ -112,7 +115,8 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
 
     // Security Crypto (шифрование API-ключей через EncryptedSharedPreferences)
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Переведён на stable 1.0.0 вместо alpha06
+    implementation(libs.androidx.security.crypto)
 
     // Serialization
     implementation(libs.kotlinx.serialization.json)

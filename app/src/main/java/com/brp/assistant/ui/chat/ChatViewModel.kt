@@ -34,7 +34,6 @@ data class ChatState(
     // Выбранная LLM для этого чата (null = использовать глобальный провайдер)
     val selectedLlmModelId: String? = null,
     val selectedOnlineProvider: String? = null,
-    // FIX: храним ВСЕ модели каталога (а не только загруженные)
     val allOfflineModels: List<OfflineModelUiItem> = emptyList(),
     val activeOfflineModelId: String? = null,
     val currentOnlineProvider: String = "Gemini"
@@ -69,7 +68,6 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // FIX: показываем ВСЕ модели каталога, с флагом isDownloaded для каждой
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 val items = PublicOfflineModelCatalog.models.map { model ->
@@ -100,13 +98,13 @@ class ChatViewModel @Inject constructor(
         if (contextChanged) {
             _state.update {
                 it.copy(
-                    messages = emptyList(),
-                    isGenerating = false,
-                    riskLevel = "low",
+                    messages           = emptyList(),
+                    isGenerating       = false,
+                    riskLevel          = "low",
                     requiresEvacuation = false,
-                    error = null,
-                    currentVehicleId = vehicleId,
-                    currentMode = mode
+                    error              = null,
+                    currentVehicleId   = vehicleId,
+                    currentMode        = mode
                 )
             }
         }
@@ -134,44 +132,74 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            // ── OOM pre-check: проверяем доступную heap-память перед инференсом ──
+            val runtime   = Runtime.getRuntime()
+            val freeMemMb = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / 1_048_576L
+            if (freeMemMb < 256L) {
+                val oomMsg = "⚠️ Недостаточно памяти для генерации (~${freeMemMb} МБ свободно). " +
+                        "Закройте другие приложения и повторите попытку."
+                _state.update {
+                    it.copy(
+                        isGenerating = false,
+                        error        = oomMsg,
+                        messages     = it.messages + ChatMessage(oomMsg, MessageRole.ASSISTANT)
+                    )
+                }
+                return@launch
+            }
+
             val history = _state.value.messages
             var assistantContent = ""
             val assistantMsg = ChatMessage("", MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }
 
-            if (mode == "diagnosis") {
-                diagnoseUseCase(text, effectiveModelId, history) { partial ->
-                    assistantContent += partial
-                    updateLastMessage(assistantContent)
-                }.collect { result ->
-                    result.onSuccess { diag ->
-                        _state.update {
-                            it.copy(
-                                isGenerating = false,
-                                riskLevel = diag.riskLevel,
-                                requiresEvacuation = diag.requiresEvacuation
-                            )
+            try {
+                if (mode == "diagnosis") {
+                    diagnoseUseCase(text, effectiveModelId, history) { partial ->
+                        assistantContent += partial
+                        updateLastMessage(assistantContent)
+                    }.collect { result ->
+                        result.onSuccess { diag ->
+                            _state.update {
+                                it.copy(
+                                    isGenerating       = false,
+                                    riskLevel          = diag.riskLevel,
+                                    requiresEvacuation = diag.requiresEvacuation
+                                )
+                            }
+                        }.onFailure { err ->
+                            _state.update { it.copy(isGenerating = false, error = err.message) }
+                            updateLastMessage("❌ Ошибка: ${err.message ?: "Неизвестная ошибка"}")
                         }
-                    }.onFailure { err ->
-                        _state.update { it.copy(isGenerating = false, error = err.message) }
-                        updateLastMessage("❌ Ошибка: ${err.message ?: "Неизвестная ошибка"}")
+                    }
+                } else {
+                    val retrievalMode = when (mode) {
+                        "accessory" -> RetrievalMode.ACCESSORY
+                        else        -> RetrievalMode.BOTH
+                    }
+                    val result = chatUseCase(text, retrievalMode, effectiveModelId, history) { partial ->
+                        assistantContent += partial
+                        updateLastMessage(assistantContent)
+                    }
+                    _state.update { it.copy(isGenerating = false) }
+                    if (result.isFailure) {
+                        val errMsg = result.exceptionOrNull()?.message ?: "Неизвестная ошибка"
+                        _state.update { it.copy(error = errMsg) }
+                        updateLastMessage("❌ Ошибка подключения: $errMsg")
                     }
                 }
-            } else {
-                val retrievalMode = when (mode) {
-                    "accessory" -> RetrievalMode.ACCESSORY
-                    else -> RetrievalMode.BOTH
-                }
-                val result = chatUseCase(text, retrievalMode, effectiveModelId, history) { partial ->
-                    assistantContent += partial
-                    updateLastMessage(assistantContent)
-                }
-                _state.update { it.copy(isGenerating = false) }
-                if (result.isFailure) {
-                    val errMsg = result.exceptionOrNull()?.message ?: "Неизвестная ошибка"
-                    _state.update { it.copy(error = errMsg) }
-                    updateLastMessage("❌ Ошибка подключения: $errMsg")
-                }
+            } catch (oom: OutOfMemoryError) {
+                // Нативный OOM от LLM-движка (особенно MediaPipe / LiteRT при загрузке весов)
+                val oomMsg = "💾 Модель не поместилась в память устройства. " +
+                        "Попробуйте более лёгкую модель или перезапустите приложение."
+                _state.update { it.copy(isGenerating = false, error = oomMsg) }
+                updateLastMessage(oomMsg)
+                // Даём JVM шанс освободить память после краша нативного движка
+                System.gc()
+            } catch (e: Exception) {
+                val errMsg = e.message ?: "Неизвестная ошибка выполнения"
+                _state.update { it.copy(isGenerating = false, error = errMsg) }
+                updateLastMessage("❌ Критическая ошибка: $errMsg")
             }
         }
     }
