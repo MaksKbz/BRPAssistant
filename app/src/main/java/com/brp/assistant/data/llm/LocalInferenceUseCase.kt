@@ -28,11 +28,13 @@ class LocalInferenceUseCase @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LocalInferenceUseCase"
+
         /**
-         * Rough token budget: 1 token ≈ 4 chars.
-         * Keeps prompt within model context window.
+         * Максимальное число символов в итоговом промпте.
+         * ~1 токен ≈ 4 символа; 8000 симв ≈ 2000 токенов —
+         * комфортный бюджет для большинства локальных моделей (2k–4k context).
          */
-        private const val MAX_PROMPT_CHARS = 3_000
+        private const val MAX_PROMPT_CHARS = 8_000
     }
 
     fun isReady() = engine.isReady()
@@ -45,9 +47,10 @@ class LocalInferenceUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> {
         val style = engine.getActivePromptStyle()
+        val trimmedHistory = trimHistory(history, userMessage)
         val prompt = promptBuilder.buildDiagnosisPrompt(
-            userMessage, cards, selectedModel, history, style
-        ).take(MAX_PROMPT_CHARS)
+            userMessage, cards, selectedModel, trimmedHistory, style
+        )
         return runInference(prompt, onPartial)
     }
 
@@ -59,9 +62,10 @@ class LocalInferenceUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> {
         val style  = engine.getActivePromptStyle()
+        val trimmedHistory = trimHistory(history, userMessage)
         val prompt = promptBuilder.buildAccessoryPrompt(
-            userMessage, accessories, selectedModel, history, style
-        ).take(MAX_PROMPT_CHARS)
+            userMessage, accessories, selectedModel, trimmedHistory, style
+        )
         return runInference(prompt, onPartial)
     }
 
@@ -72,9 +76,10 @@ class LocalInferenceUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> {
         val style  = engine.getActivePromptStyle()
+        val trimmedHistory = trimHistory(history, userMessage)
         val prompt = promptBuilder.buildModelSelectionPrompt(
-            userMessage, models, history, style
-        ).take(MAX_PROMPT_CHARS)
+            userMessage, models, trimmedHistory, style
+        )
         return runInference(prompt, onPartial)
     }
 
@@ -87,10 +92,43 @@ class LocalInferenceUseCase @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> {
         val style  = engine.getActivePromptStyle()
+        val trimmedHistory = trimHistory(history, userMessage)
         val prompt = promptBuilder.buildFreeChatPrompt(
-            userMessage, cards, accessories, selectedModel, history, style
-        ).take(MAX_PROMPT_CHARS)
+            userMessage, cards, accessories, selectedModel, trimmedHistory, style
+        )
         return runInference(prompt, onPartial)
+    }
+
+    /**
+     * Обрезает историю целыми сообщениями, если суммарная длина
+     * userMessage + history превышает MAX_PROMPT_CHARS.
+     *
+     * Стратегия: удаляем старые сообщения с начала (контекст
+     * всегда сохраняют последние сообщения).
+     * Текущий userMessage некогда не выбрасывается.
+     */
+    private fun trimHistory(
+        history: List<ChatMessage>,
+        userMessage: String
+    ): List<ChatMessage> {
+        if (history.isEmpty()) return history
+
+        // Резервируем бюджет для userMessage (всегда передаётся полностью)
+        val reservedForCurrent = userMessage.length + 200 // +200 для системного промпта
+        val budgetForHistory = MAX_PROMPT_CHARS - reservedForCurrent
+
+        if (budgetForHistory <= 0) return emptyList()
+
+        // Берём сообщения с конца (наиболее свежие) и набираем пока бюджет не исчерпан
+        var used = 0
+        val kept = mutableListOf<ChatMessage>()
+        for (msg in history.asReversed()) {
+            val msgLen = msg.content.length + 20 // +20 для ролевого префикса ("user:", "assistant:")
+            if (used + msgLen > budgetForHistory) break
+            kept.add(0, msg)
+            used += msgLen
+        }
+        return kept
     }
 
     // ── Internal ────────────────────────────────────────────────
