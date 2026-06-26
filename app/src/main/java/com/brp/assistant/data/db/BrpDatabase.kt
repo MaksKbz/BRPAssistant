@@ -1,6 +1,8 @@
 package com.brp.assistant.data.db
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.brp.assistant.data.db.entities.*
 
 /**
@@ -8,19 +10,47 @@ import com.brp.assistant.data.db.entities.*
  * version 1 — initial
  * version 2 — added FaultCode table
  * version 3 — added AccessoryCompatibility, KnowledgeCardFts
- * version 4 — added modelFamily column to KnowledgeCard (current)
+ * version 4 — added modelFamily column to KnowledgeCard
+ * version 5 — added chat_sessions + chat_messages tables  ← current
  *
  * MIGRATION POLICY:
- * fallbackToDestructiveMigration() пересоздаёт БД при несоответствии версий.
- * Это безопасно, потому что все данные сидят в assets и пересеиваются при
- * первом запуске (DatabaseInitializer). Никакие пользовательские данные не теряются.
- *
- * Когда НУЖНЫ полноценные Migration(from, to) объекты:
- *  - при добавлении таблицы с пользовательскими записями (история чатов, профили)
- *  - при переименовании колонки с сохранением данных
- * В этом случае замените .fallbackToDestructiveMigration() на
- * .addMigrations(MIGRATION_4_5, ...) и напишите ALTER TABLE / CREATE TABLE.
+ * v1→v4 используют fallbackToDestructiveMigration (данные из assets, не потеряем ничего).
+ * v4→v5 — полноценная Migration: создаём две новые таблицы, не трогаем старые.
+ * Пользовательские данные (история чатов) теперь персистентны и НЕ сносятся при обновлении.
  */
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT NOT NULL PRIMARY KEY,
+                title TEXT NOT NULL,
+                vehicleId TEXT,
+                mode TEXT NOT NULL,
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT NOT NULL PRIMARY KEY,
+                sessionId TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        database.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_chat_messages_sessionId ON chat_messages(sessionId)"
+        )
+    }
+}
+
 @Database(
     entities = [
         BrpModel::class,
@@ -28,9 +58,11 @@ import com.brp.assistant.data.db.entities.*
         KnowledgeCard::class,
         KnowledgeCardFts::class,
         FaultCode::class,
-        AccessoryCompatibility::class
+        AccessoryCompatibility::class,
+        ChatSessionEntity::class,
+        ChatMessageEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class BrpDatabase : RoomDatabase() {
@@ -38,6 +70,7 @@ abstract class BrpDatabase : RoomDatabase() {
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
     abstract fun faultCodeDao(): FaultCodeDao
+    abstract fun chatSessionDao(): ChatSessionDao
 }
 
 @Dao

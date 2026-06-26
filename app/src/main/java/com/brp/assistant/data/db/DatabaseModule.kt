@@ -16,19 +16,16 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BrpDatabase =
-        Room.databaseBuilder(
-            context,
-            BrpDatabase::class.java,
-            "brp_assistant.db"
-        )
-            // fallbackToDestructiveMigration — безопасен, т.к. все данные
-            // переносятся из assets при первом старте DatabaseInitializer.
-            // Никаких пользовательских записей в БД нет (они в DataStore).
-            .fallbackToDestructiveMigration()
+        Room.databaseBuilder(context, BrpDatabase::class.java, "brp_assistant.db")
+            // v1-v4: данные из assets — пересев безопасен
+            .fallbackToDestructiveMigrationFrom(1, 2, 3)
+            // v4→v5: полноценная миграция — история чатов сохраняется
+            .addMigrations(MIGRATION_4_5)
             .build()
 
-    @Provides fun provideModelDao(db: BrpDatabase)      = db.modelDao()
-    @Provides fun provideAccessoryDao(db: BrpDatabase)  = db.accessoryDao()
-    @Provides fun provideKnowledgeDao(db: BrpDatabase)  = db.knowledgeDao()
-    @Provides fun provideFaultCodeDao(db: BrpDatabase)  = db.faultCodeDao()
+    @Provides fun provideModelDao(db: BrpDatabase): ModelDao = db.modelDao()
+    @Provides fun provideAccessoryDao(db: BrpDatabase): AccessoryDao = db.accessoryDao()
+    @Provides fun provideKnowledgeDao(db: BrpDatabase): KnowledgeDao = db.knowledgeDao()
+    @Provides fun provideFaultCodeDao(db: BrpDatabase): FaultCodeDao = db.faultCodeDao()
+    @Provides fun provideChatSessionDao(db: BrpDatabase): ChatSessionDao = db.chatSessionDao()
 }
