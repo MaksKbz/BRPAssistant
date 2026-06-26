@@ -4,6 +4,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.StatFs
 import android.util.Log
@@ -57,12 +59,27 @@ class ModelDownloadWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val initialUrl = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
-        val fileName   = inputData.getString(KEY_FILENAME) ?: return@withContext Result.failure()
+        val initialUrl   = inputData.getString(KEY_URL)      ?: return@withContext Result.failure()
+        val fileName     = inputData.getString(KEY_FILENAME)  ?: return@withContext Result.failure()
         val approxSizeMb = inputData.getLong(KEY_SIZE, 0L) / (1024 * 1024)
 
         // Показываем foreground уведомление — без этого на Android 12+ краш
         setForeground(getForegroundInfo())
+
+        // FIX: проверка доступности сети до начала загрузки.
+        // Без этой проверки при отсутствии интернета падало с непонятной
+        // IOException «failed to connect to huggingface.co» без совета.
+        // Теперь пользователь видит явное сообщение + Result.retry() если
+        // попыток ещё мало — WorkManager повторит с exponential backoff.
+        if (!isNetworkAvailable()) {
+            val noNetMsg = "Нет интернета. Проверьте подключение к Wi-Fi или мобильным данным."
+            return@withContext if (runAttemptCount < 3) {
+                Log.w(TAG, "No network, will retry (attempt $runAttemptCount)")
+                Result.retry()
+            } else {
+                Result.failure(Data.Builder().putString("error", noNetMsg).build())
+            }
+        }
 
         // FIX: исправлен путь хранения модели.
         // Было: context.filesDir — не совпадал с путём в LlmInferenceEngine
@@ -116,16 +133,60 @@ class ModelDownloadWorker @AssistedInject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Download failed: ${e.message}")
+            val msg = e.message ?: ""
             when {
-                e.message?.contains("401") == true ||
-                e.message?.contains("403") == true ->
+                msg.contains("401") || msg.contains("403") ->
                     Result.failure(
                         Data.Builder().putString("error",
                             "Доступ ограничен (401/403). Попробуйте другую модель.").build()
                     )
-                runAttemptCount < 2 -> Result.retry()
+                // FIX: timeout и connect-ошибки явно отделены от серверных —
+                // пользователь видит совет проверить сеть, а не просто «ошибка».
+                msg.contains("timeout", ignoreCase = true) ||
+                msg.contains("connect", ignoreCase = true) ||
+                msg.contains("reset",   ignoreCase = true) -> {
+                    if (runAttemptCount < 3) {
+                        Log.w(TAG, "Network error, will retry (attempt $runAttemptCount): $msg")
+                        Result.retry()
+                    } else {
+                        Result.failure(
+                            Data.Builder().putString(
+                                "error",
+                                "Нет соединения с сервером после 3 попыток. Проверьте интернет."
+                            ).build()
+                        )
+                    }
+                }
+                // FIX: прочие IOException — даём 3 попытки вместо 2.
+                // WorkManager использует exponential backoff по умолчанию (30с → 60с → 120с),
+                // что разумнее для нестабильного мобильного соединения при загрузке 5+ ГБ.
+                runAttemptCount < 3 -> Result.retry()
                 else -> Result.failure(Data.Builder().putString("error", e.message).build())
             }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Network check
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * FIX: проверка активного сетевого соединения.
+     * NetworkCapabilities используется вместо устаревшего NetworkInfo (deprecated API 29).
+     * Проверяем NET_CAPABILITY_INTERNET + NET_CAPABILITY_VALIDATED — последний гарантирует,
+     * что сеть не только есть, но и реально имеет доступ в интернет (captive portal = false).
+     */
+    private fun isNetworkAvailable(): Boolean {
+        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } else {
+            @Suppress("DEPRECATION")
+            cm.activeNetworkInfo?.isConnected == true
         }
     }
 
@@ -241,7 +302,6 @@ class ModelDownloadWorker @AssistedInject constructor(
                     // Range Not Satisfiable: локальный .part файл некорректен
                     tempFile.delete()
                     if (retryCount < 1) {
-                        // Один повтор: сбрасываем offset и качаем заново
                         return performDownload(url, tempFile, fileName, retryCount + 1)
                     } else {
                         throw IOException("HTTP 416: Range Not Satisfiable после повтора — возможно повреждён .part файл")
@@ -287,7 +347,6 @@ class ModelDownloadWorker @AssistedInject constructor(
                                 ((downloaded.toFloat() / total) * 100).toInt().coerceIn(0, 100)
                             else -1
 
-                            // Обновляем прогресс в WorkManager (для UI)
                             setProgress(
                                 Data.Builder()
                                     .putFloat(KEY_PROGRESS, downloaded.toFloat() / total.coerceAtLeast(1))
@@ -296,7 +355,6 @@ class ModelDownloadWorker @AssistedInject constructor(
                                     .build()
                             )
 
-                            // Обновляем foreground-уведомление с реальным %
                             if (progress >= 0) {
                                 setForeground(
                                     ForegroundInfo(
@@ -326,7 +384,7 @@ class ModelDownloadWorker @AssistedInject constructor(
             availableBytes > requiredBytes
         } catch (e: Exception) {
             Log.w(TAG, "hasEnoughSpace check failed: ${e.message}")
-            false // безопасный дефолт — не начинаем загрузку при неизвестном состоянии
+            false
         }
     }
 
