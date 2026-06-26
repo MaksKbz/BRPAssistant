@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -29,7 +30,7 @@ data class ModelManagerState(
     val downloadProgress: Float = 0f,
     val error: String? = null,
     val geminiApiKey: String? = null,
-    val groqApiKey: String? = null,  // FIX: was grokApiKey
+    val groqApiKey: String? = null,
     val aiProvider: String = "Gemini",
     val aiModelName: String = "gemini-1.5-flash",
     val aiSystemPrompt: String = "",
@@ -60,14 +61,25 @@ class ModelManagerViewModel @Inject constructor(
                 _state.update { it.copy(activeModelId = id) }
             }
         }
+        // FIX HIGH-2: подписываемся на ошибки парсинга кастомных моделей.
+        // filterNotNull() — не показываем Snackbar при старте (customModelError == null).
+        // После показа clearError() сбросит и llmEngine.clearCustomModelError()
+        // чтобы предотвратить повторный показ при переходе на экран.
+        viewModelScope.launch {
+            llmEngine.customModelError
+                .filterNotNull()
+                .collect { errorMsg ->
+                    _state.update { it.copy(error = errorMsg) }
+                }
+        }
         viewModelScope.launch {
             settingsRepository.geminiApiKey.collect { key ->
                 _state.update { it.copy(geminiApiKey = key) }
             }
         }
         viewModelScope.launch {
-            settingsRepository.groqApiKey.collect { key ->  // FIX: was grokApiKey
-                _state.update { it.copy(groqApiKey = key) }  // FIX: was grokApiKey
+            settingsRepository.groqApiKey.collect { key ->
+                _state.update { it.copy(groqApiKey = key) }
             }
         }
         viewModelScope.launch {
@@ -180,7 +192,7 @@ class ModelManagerViewModel @Inject constructor(
             val result = remoteLlm.validateKey(_state.value.aiProvider, trimmedKey, _state.value.aiModelName)
             if (result.isSuccess) {
                 if (_state.value.aiProvider == "Gemini") settingsRepository.setGeminiApiKey(trimmedKey)
-                else settingsRepository.setGroqApiKey(trimmedKey)  // FIX: was setGrokApiKey
+                else settingsRepository.setGroqApiKey(trimmedKey)
                 _state.update { it.copy(isValidating = false, validationResult = "SUCCESS") }
             } else {
                 _state.update { it.copy(isValidating = false, validationResult = result.exceptionOrNull()?.message ?: "ERROR") }
@@ -209,7 +221,12 @@ class ModelManagerViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setAiTemperature(temp) }
     }
 
+    /**
+     * FIX HIGH-2: clearError() теперь сбрасывает и ошибку кастомной модели
+     * в LlmInferenceEngine, чтобы ошибка не появилась снова при переходе на экран.
+     */
     fun clearError() {
         _state.update { it.copy(error = null) }
+        llmEngine.clearCustomModelError()
     }
 }
