@@ -3,6 +3,24 @@ package com.brp.assistant.data.db
 import androidx.room.*
 import com.brp.assistant.data.db.entities.*
 
+/**
+ * SCHEMA HISTORY
+ * version 1 — initial
+ * version 2 — added FaultCode table
+ * version 3 — added AccessoryCompatibility, KnowledgeCardFts
+ * version 4 — added modelFamily column to KnowledgeCard (current)
+ *
+ * MIGRATION POLICY:
+ * fallbackToDestructiveMigration() пересоздаёт БД при несоответствии версий.
+ * Это безопасно, потому что все данные сидят в assets и пересеиваются при
+ * первом запуске (DatabaseInitializer). Никакие пользовательские данные не теряются.
+ *
+ * Когда НУЖНЫ полноценные Migration(from, to) объекты:
+ *  - при добавлении таблицы с пользовательскими записями (история чатов, профили)
+ *  - при переименовании колонки с сохранением данных
+ * В этом случае замените .fallbackToDestructiveMigration() на
+ * .addMigrations(MIGRATION_4_5, ...) и напишите ALTER TABLE / CREATE TABLE.
+ */
 @Database(
     entities = [
         BrpModel::class,
@@ -125,8 +143,6 @@ interface KnowledgeDao {
     """)
     suspend fun searchFullText(query: String, limit: Int = 5): List<KnowledgeCard>
 
-    // OLD (kept for reference, replaced by getByBrandAndCategory below):
-    // getByBrandOrCategory used OR — returned ALL BRP cards regardless of model
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand OR equipmentType = :category
@@ -134,7 +150,6 @@ interface KnowledgeDao {
     """)
     suspend fun getByBrandOrCategory(brand: String, category: String): List<KnowledgeCard>
 
-    // FIX: strict AND — card must belong to BOTH brand AND equipmentType
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand AND equipmentType = :category
@@ -142,7 +157,6 @@ interface KnowledgeDao {
     """)
     suspend fun getByBrandAndCategory(brand: String, category: String): List<KnowledgeCard>
 
-    // FIX: filter by modelFamily (maps to BrpModel.subcategory, e.g. "Renegade")
     @Query("""
         SELECT * FROM knowledge_cards
         WHERE brand = :brand

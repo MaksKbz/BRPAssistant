@@ -1,7 +1,12 @@
 package com.brp.assistant.data.workers
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
 import dagger.assisted.Assisted
@@ -18,82 +23,135 @@ import java.io.IOException
 class ModelDownloadWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    /**
-     * FIX #12: OkHttpClient инжектируется как синглтон из AppModule.
-     * Больше не создаётся новый экземпляр на каждый Worker.
-     */
     private val okHttpClient: OkHttpClient
 ) : CoroutineWorker(context, params) {
+
+    private val notificationManager =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     private val commonUserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // getForegroundInfo() — ОБЯЗАТЕЛЕН для Android 12+ (API 31+).
+    // WorkManager вызывает его ДО doWork() при запуске Expedited/Long-running
+    // задачи. Без него — ForegroundServiceDidNotStartInTimeException.
+    // ──────────────────────────────────────────────────────────────────────────
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        createNotificationChannel()
+        val notification = buildNotification(
+            title = inputData.getString(KEY_FILENAME) ?: "Загрузка модели",
+            progress = 0,
+            indeterminate = true
+        )
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val initialUrl = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
-        val fileName = inputData.getString(KEY_FILENAME) ?: return@withContext Result.failure()
+        val fileName   = inputData.getString(KEY_FILENAME) ?: return@withContext Result.failure()
 
-        val outputDir = File(applicationContext.filesDir, MODEL_DIR)
+        // Показываем foreground уведомление — без этого на Android 12+ краш
+        setForeground(getForegroundInfo())
+
+        val outputDir  = File(applicationContext.filesDir, MODEL_DIR)
         if (!outputDir.exists()) outputDir.mkdirs()
 
         val outputFile = File(outputDir, fileName)
-        val tempFile = File(outputDir, "$fileName.part")
+        val tempFile   = File(outputDir, "$fileName.part")
 
-        Log.d("ModelDownloadWorker", "Starting download: $fileName")
+        Log.d(TAG, "Starting download: $fileName")
 
         try {
             val directUrl = getDirectDownloadUrl(initialUrl)
-            performDownload(directUrl, tempFile)
+            performDownload(directUrl, tempFile, fileName)
 
-            // FIX #6: порог проверки повышен с 1MB до 50MB.
-            // Модели GGUF весят от 420MB, поэтому 1MB был слишком мал —
-            // повреждённый частичный файл мог пройти проверку.
             val minValidSize = 50L * 1024 * 1024  // 50 MB
             if (tempFile.exists() && tempFile.length() > minValidSize) {
                 if (outputFile.exists()) outputFile.delete()
-                if (tempFile.renameTo(outputFile)) {
-                    Result.success(
-                        Data.Builder()
-                            .putString(KEY_FILEPATH, outputFile.absolutePath)
-                            .build()
-                    )
-                } else {
+                if (!tempFile.renameTo(outputFile)) {
                     tempFile.copyTo(outputFile, overwrite = true)
                     tempFile.delete()
-                    Result.success(
-                        Data.Builder()
-                            .putString(KEY_FILEPATH, outputFile.absolutePath)
-                            .build()
-                    )
                 }
+                notifyDone(fileName)
+                Result.success(
+                    Data.Builder().putString(KEY_FILEPATH, outputFile.absolutePath).build()
+                )
             } else {
                 tempFile.delete()
                 Result.failure(
-                    Data.Builder()
-                        .putString("error", "Файл повреждён или слишком мал (< 50 МБ)")
-                        .build()
+                    Data.Builder().putString("error", "Файл повреждён или слишком мал (< 50 МБ)").build()
                 )
             }
         } catch (e: Exception) {
-            Log.e("ModelDownloadWorker", "Download failed: ${e.message}")
-            if (e.message?.contains("401") == true || e.message?.contains("403") == true) {
-                Result.failure(
-                    Data.Builder()
-                        .putString("error", "Доступ ограничен (401/403). Попробуйте модель Qwen или перезагрузите сеть.")
-                        .build()
-                )
-            } else if (runAttemptCount < 2) {
-                Result.retry()
-            } else {
-                Result.failure(Data.Builder().putString("error", e.message).build())
+            Log.e(TAG, "Download failed: ${e.message}")
+            when {
+                e.message?.contains("401") == true ||
+                e.message?.contains("403") == true ->
+                    Result.failure(
+                        Data.Builder().putString("error",
+                            "Доступ ограничен (401/403). Попробуйте другую модель.").build()
+                    )
+                runAttemptCount < 2 -> Result.retry()
+                else -> Result.failure(Data.Builder().putString("error", e.message).build())
             }
         }
     }
 
-    /**
-     * FIX #3: метод сделан suspend и выполняется в withContext(Dispatchers.IO).
-     * Ранее был обычным fun — блокирующий сетевой вызов мог привести к
-     * NetworkOnMainThreadException если Worker запускался не на IO-диспатчере.
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // Notification helpers
+    // ──────────────────────────────────────────────────────────────────────────
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Загрузка моделей ИИ",
+                NotificationManager.IMPORTANCE_LOW   // LOW — без звука, просто прогресс
+            ).apply {
+                description = "Фоновая загрузка LLM-моделей"
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(
+        title: String,
+        progress: Int,
+        indeterminate: Boolean = false
+    ) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        .setContentTitle(title)
+        .setContentText(
+            if (indeterminate) "Подготовка загрузки…"
+            else "Загрузка: $progress%"
+        )
+        .setSmallIcon(android.R.drawable.stat_sys_download)
+        .setOngoing(true)
+        .setOnlyAlertOnce(true)
+        .setProgress(100, progress, indeterminate)
+        .build()
+
+    private suspend fun notifyDone(fileName: String) {
+        val doneNotification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle("Модель загружена")
+            .setContentText(fileName)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+            .build()
+        notificationManager.notify(NOTIFICATION_ID + 1, doneNotification)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Download logic
+    // ──────────────────────────────────────────────────────────────────────────
     private suspend fun getDirectDownloadUrl(initialUrl: String): String =
         withContext(Dispatchers.IO) {
             val urlWithParam = if (initialUrl.contains("?"))
@@ -127,7 +185,7 @@ class ModelDownloadWorker @AssistedInject constructor(
             initialUrl
         }
 
-    private suspend fun performDownload(url: String, tempFile: File) {
+    private suspend fun performDownload(url: String, tempFile: File, fileName: String) {
         if (tempFile.exists() && tempFile.length() < 1024) tempFile.delete()
         val alreadyDownloaded = if (tempFile.exists()) tempFile.length() else 0L
 
@@ -140,18 +198,16 @@ class ModelDownloadWorker @AssistedInject constructor(
             }
             .build()
 
-        // Дочерний клиент с followRedirects=true для финальной загрузки.
-        // newBuilder() не создаёт новый пул соединений — переиспользует родительский.
         val downloadClient = okHttpClient.newBuilder().followRedirects(true).build()
         downloadClient.newCall(request).execute().use { response ->
             if (response.code == 416) {
                 tempFile.delete()
-                return performDownload(url, tempFile)
+                return performDownload(url, tempFile, fileName)
             }
             if (response.code == 401 || response.code == 403) {
                 if (alreadyDownloaded > 0) {
                     tempFile.delete()
-                    return performDownload(url, tempFile)
+                    return performDownload(url, tempFile, fileName)
                 }
                 throw IOException("Access Denied (${response.code})")
             }
@@ -167,7 +223,7 @@ class ModelDownloadWorker @AssistedInject constructor(
 
             FileOutputStream(tempFile, appendMode).use { outputStream ->
                 body.byteStream().use { input ->
-                    val buffer = ByteArray(128 * 1024)
+                    val buffer     = ByteArray(128 * 1024)
                     var downloaded = if (appendMode) alreadyDownloaded else 0L
                     var read: Int
                     var lastUpdate = 0L
@@ -179,14 +235,28 @@ class ModelDownloadWorker @AssistedInject constructor(
 
                         val now = System.currentTimeMillis()
                         if (now - lastUpdate > 1000) {
-                            val progress = if (total > 0) downloaded.toFloat() / total else -1f
+                            val progress = if (total > 0)
+                                ((downloaded.toFloat() / total) * 100).toInt().coerceIn(0, 100)
+                            else -1
+
+                            // Обновляем прогресс в WorkManager (для UI)
                             setProgress(
                                 Data.Builder()
-                                    .putFloat(KEY_PROGRESS, progress)
+                                    .putFloat(KEY_PROGRESS, downloaded.toFloat() / total.coerceAtLeast(1))
                                     .putLong(KEY_DOWNLOADED, downloaded)
                                     .putLong(KEY_SIZE, total)
                                     .build()
                             )
+
+                            // Обновляем foreground-уведомление с реальным %
+                            if (progress >= 0) {
+                                setForeground(
+                                    ForegroundInfo(
+                                        NOTIFICATION_ID,
+                                        buildNotification(fileName, progress)
+                                    )
+                                )
+                            }
                             lastUpdate = now
                         }
                     }
@@ -196,20 +266,23 @@ class ModelDownloadWorker @AssistedInject constructor(
     }
 
     companion object {
-        const val MODEL_DIR = "models"
-        const val KEY_URL = "url"
-        const val KEY_FILENAME = "fileName"
-        const val KEY_SIZE = "size"
-        const val KEY_PROGRESS = "progress"
-        const val KEY_DOWNLOADED = "downloaded"
-        const val KEY_FILEPATH = "filePath"
+        private const val TAG             = "ModelDownloadWorker"
+        private const val CHANNEL_ID      = "brp_model_download"
+        private const val NOTIFICATION_ID = 1001
 
-        fun buildWorkData(url: String, fileName: String, size: Long): Data {
-            return Data.Builder()
+        const val MODEL_DIR      = "models"
+        const val KEY_URL        = "url"
+        const val KEY_FILENAME   = "fileName"
+        const val KEY_SIZE       = "size"
+        const val KEY_PROGRESS   = "progress"
+        const val KEY_DOWNLOADED = "downloaded"
+        const val KEY_FILEPATH   = "filePath"
+
+        fun buildWorkData(url: String, fileName: String, size: Long): Data =
+            Data.Builder()
                 .putString(KEY_URL, url)
                 .putString(KEY_FILENAME, fileName)
                 .putLong(KEY_SIZE, size)
                 .build()
-        }
     }
 }
