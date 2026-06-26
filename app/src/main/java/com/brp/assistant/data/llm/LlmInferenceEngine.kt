@@ -1,6 +1,7 @@
 package com.brp.assistant.data.llm
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import com.brp.assistant.data.repository.SettingsRepository
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -44,10 +46,9 @@ class LlmInferenceEngine @Inject constructor(
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
         /**
-         * FIX #1: Максимальное время ожидания ответа от MediaPipe.
+         * Максимальное время ожидания ответа от MediaPipe.
          * 120 секунд — достаточно для генерации 1024 токенов даже на Helio G85,
          * но защищает от бесконечного зависания при нативном дедлоке в JNI.
-         * Если нужно настроить под конкретное железо — меняй здесь.
          */
         private const val GENERATION_TIMEOUT_MS = 120_000L
 
@@ -58,8 +59,22 @@ class LlmInferenceEngine @Inject constructor(
     // ── MediaPipe движок (TASK) ──────────────────────────────────────────────
     private var mediaPipeInference: LlmInference? = null
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /**
+     * FIX #scope: заменён Dispatchers.Main на Dispatchers.Default.
+     * Синглтон не должен держать корутины на UI-потоке — scope.cancel()
+     * в destroy() теперь корректно прерывает IO-переключённые корутины
+     * (initialize, generateResponse) при смене модели или повороте экрана.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
+
+    /**
+     * FIX #deleteModel-guard: флаг активной генерации.
+     * deleteModel() проверяет его перед closeInternal() — предотвращает
+     * SIGSEGV при вызове mediaPipeInference?.close() в JNI на Exynos/Kirin
+     * пока MediaPipe генерирует токены в параллельной корутине.
+     */
+    private val _isGenerating = AtomicBoolean(false)
 
     private val _activeModelId = MutableStateFlow<String?>(null)
     val activeModelId: StateFlow<String?> = _activeModelId.asStateFlow()
@@ -71,13 +86,19 @@ class LlmInferenceEngine @Inject constructor(
 
     init {
         scope.launch {
-            val savedId = settingsRepository.activeModelId.first() ?: return@launch
-            val customModels = loadCustomModels()
-            val model = customModels.find { it.id == savedId }
-                ?: PublicOfflineModelCatalog.getById(savedId)
-                ?: return@launch
-            if (isModelDownloaded(model)) {
-                initialize(model)
+            try {
+                val savedId = settingsRepository.activeModelId.first() ?: return@launch
+                val customModels = loadCustomModels()
+                val model = customModels.find { it.id == savedId }
+                    ?: PublicOfflineModelCatalog.getById(savedId)
+                    ?: return@launch
+                if (isModelDownloaded(model)) {
+                    initialize(model)
+                }
+            } catch (e: Throwable) {
+                // FIX: логируем вместо Silent failure — причина пустого состояния
+                // при старте теперь видна в logcat
+                Log.e(TAG, "Auto-restore model failed on init", e)
             }
         }
     }
@@ -137,9 +158,6 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun initMediaPipe(modelFile: File): Result<Unit> {
-        // Сначала пробуем дефолтный бэкенд (GPU/NPU если доступен),
-        // при ошибке явно переключаемся на CPU — совместимо с Dimensity 9300,
-        // Kirin 9000 и другими SoC, где GPU-делегат не поддерживает ряд операций.
         return tryInitMediaPipeWithCpuFallback(modelFile)
     }
 
@@ -179,20 +197,14 @@ class LlmInferenceEngine @Inject constructor(
 
     /**
      * Генерирует ответ, прозрачно делегируя активному движку.
-     * Системный промпт передаётся в LiteRT-LM нативно;
-     * MediaPipe получает его как часть уже построенного [prompt].
      *
-     * FIX #catch-throwable: catch (e: Throwable) вместо catch (e: Exception) —
-     * OutOfMemoryError во время генерации токенов на JNI-слое MediaPipe
-     * является Error, а не Exception, и ранее не перехватывался,
-     * что приводило к крэшу на устройствах с 3 ГБ RAM.
+     * FIX #isGenerating: _isGenerating выставляется в true перед генерацией
+     * и сбрасывается в finally — deleteModel() проверяет флаг и не позволяет
+     * удалить модель пока JNI-слой MediaPipe активен.
      *
-     * FIX #1: обёрнут в withTimeout(GENERATION_TIMEOUT_MS).
-     * inference.generateResponse(prompt) — синхронный вызов без таймаута;
-     * на слабых устройствах (Helio G85, MediaTek 700) он мог блокировать
-     * Dispatchers.IO поток на неопределённое время без возможности отмены.
-     * При TimeoutCancellationException пользователь получает понятное сообщение
-     * вместо бесконечного спиннера.
+     * FIX #catch-throwable: catch (e: Throwable) — OutOfMemoryError во время
+     * генерации токенов является Error, а не Exception, и без этого не
+     * перехватывался, вызывая краш на устройствах с 3 ГБ RAM.
      */
     suspend fun generateResponse(
         prompt: String,
@@ -201,22 +213,22 @@ class LlmInferenceEngine @Inject constructor(
     ): Result<String> {
         return when (activeModelInfo?.format) {
             ModelFormat.LITERTLM -> {
-                liteRtLmEngine.generateResponse(prompt, systemPrompt, onPartial)
+                _isGenerating.set(true)
+                try {
+                    liteRtLmEngine.generateResponse(prompt, systemPrompt, onPartial)
+                } finally {
+                    _isGenerating.set(false)
+                }
             }
             ModelFormat.TASK, null -> {
                 val inference = mediaPipeInference
                     ?: return Result.failure(Exception("MediaPipe не инициализирован"))
                 withContext(Dispatchers.IO) {
+                    _isGenerating.set(true)
                     try {
-                        // FIX #1: withTimeout гарантирует, что синхронный JNI-вызов
-                        // не заблокирует поток дольше GENERATION_TIMEOUT_MS.
-                        // При отмене корутины (например, пользователь ушёл с экрана)
-                        // TimeoutCancellationException всплывёт наружу и прервёт генерацию.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             inference.generateResponse(prompt)
                         }
-                        // Проверяем isActive: если корутина была отменена пока JNI
-                        // завершал работу — не шлём устаревший ответ в UI
                         if (!isActive) return@withContext Result.failure(
                             CancellationException("Генерация отменена")
                         )
@@ -228,7 +240,6 @@ class LlmInferenceEngine @Inject constructor(
                         Log.w(TAG, "MediaPipe generation timed out after ${GENERATION_TIMEOUT_MS}ms")
                         Result.failure(RuntimeException(msg, e))
                     } catch (e: Throwable) {
-                        // Перехватываем Throwable (включая OutOfMemoryError и нативные крэши)
                         val userMsg = when (e) {
                             is OutOfMemoryError ->
                                 "Недостаточно памяти для генерации ответа. " +
@@ -237,6 +248,8 @@ class LlmInferenceEngine @Inject constructor(
                         }
                         Log.e(TAG, "generateResponse failed: $userMsg", e)
                         Result.failure(RuntimeException(userMsg, e))
+                    } finally {
+                        _isGenerating.set(false)
                     }
                 }
             }
@@ -262,14 +275,9 @@ class LlmInferenceEngine @Inject constructor(
     suspend fun close() = mutex.withLock { closeInternal() }
 
     /**
-     * FIX #destroy: убран runBlocking — он вызывал ANR/deadlock когда
-     * initialize() держал mutex в момент вызова destroy() (поворот экрана,
-     * смена модели, onDestroy Activity). Теперь:
-     *   1. scope.cancel() — прерывает все активные корутины (включая initialize)
-     *   2. closeInternal() — вызывается напрямую без mutex, т.к. все корутины
-     *      уже отменены и race condition невозможен.
-     * liteRtLmEngine.close() убран отсюда — closeInternal() уже его вызывает,
-     * двойной вызов приводил к нативному крашу (SIGABRT) на NPU-устройствах.
+     * destroy() — убран runBlocking во избежание ANR/deadlock.
+     * scope.cancel() прерывает все активные корутины, затем closeInternal()
+     * вызывается напрямую без mutex т.к. race condition уже невозможен.
      */
     fun destroy() {
         scope.cancel()
@@ -289,28 +297,47 @@ class LlmInferenceEngine @Inject constructor(
 
     /**
      * Единый метод получения пути к файлу модели.
-     * Используется здесь и должен использоваться во всех местах,
-     * где нужен путь к файлу модели — для консистентности путей.
      *
-     * Порядок приоритета хранилища:
-     *   1. getExternalFilesDir(null) — основное (не требует разрешений, Scoped Storage)
-     *   2. filesDir — fallback для устройств без внешнего хранилища
+     * FIX #go-edition: явная проверка Environment.getExternalStorageState()
+     * перед обращением к getExternalFilesDir(). На Android Go Edition
+     * (Tecno Spark, Itel A70, < 2 ГБ RAM) метод возвращает null даже при
+     * наличии накопителя, если тот монтируется в момент вызова.
+     * При недоступном внешнем хранилище fallback на filesDir.
      */
     fun getModelFile(model: OfflineModelInfo): File {
-        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
+        val baseDir = getModelsBaseDir()
         val modelDir = File(baseDir, "models/${model.id}")
         return File(modelDir, model.filename)
     }
 
     /**
-     * Возвращает базовую директорию для хранения моделей.
-     * Используй этот метод в ModelDownloadWorker и других местах
-     * вместо прямого обращения к filesDir/getExternalFilesDir.
+     * Базовая директория для моделей.
+     * Использует внешнее хранилище только если оно смонтировано и доступно
+     * для записи — защита от Android Go Edition и частично заполненного
+     * накопителя в состоянии MEDIA_MOUNTED_READ_ONLY.
      */
-    fun getModelsBaseDir(): File = context.getExternalFilesDir(null) ?: context.filesDir
+    fun getModelsBaseDir(): File {
+        val externalState = Environment.getExternalStorageState()
+        return if (externalState == Environment.MEDIA_MOUNTED) {
+            context.getExternalFilesDir(null) ?: context.filesDir
+        } else {
+            context.filesDir
+        }
+    }
 
+    /**
+     * Проверяет что модель полностью скачана и готова к использованию.
+     *
+     * FIX #race-condition: при активной загрузке ModelDownloadWorker пишет
+     * файл под именем filename + ".part". Если .part-файл существует —
+     * загрузка ещё идёт и модель не готова, даже если основной файл уже
+     * частично существует на eMMC (бюджетные Realme/Tecno с eMMC 5.0).
+     * Это предотвращает двойной запуск загрузки.
+     */
     fun isModelDownloaded(model: OfflineModelInfo): Boolean {
         val file = getModelFile(model)
+        val partFile = File(file.parent, file.name + ".part")
+        if (partFile.exists()) return false  // загрузка ещё идёт
         val minSizeBytes = maxOf(
             FALLBACK_MIN_FILE_SIZE_BYTES,
             (model.approxSizeMb * 1024L * 1024L * 0.8).toLong()
@@ -318,11 +345,24 @@ class LlmInferenceEngine @Inject constructor(
         return file.exists() && file.length() >= minSizeBytes
     }
 
-    suspend fun deleteModel(model: OfflineModelInfo): Boolean = mutex.withLock {
-        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
+    /**
+     * Удаляет модель с диска.
+     *
+     * FIX #deleteModel-guard: если в данный момент идёт генерация ответа
+     * (_isGenerating == true), удаление отклоняется с ошибкой — прямой
+     * вызов close() на активном JNI-объекте MediaPipe вызывает SIGSEGV
+     * на Exynos 1280 и Kirin 710.
+     */
+    suspend fun deleteModel(model: OfflineModelInfo): Result<Boolean> = mutex.withLock {
+        if (_isGenerating.get()) {
+            return@withLock Result.failure(
+                Exception("Невозможно удалить модель во время генерации ответа. Дождитесь завершения.")
+            )
+        }
+        val baseDir = getModelsBaseDir()
         val modelDir = File(baseDir, "models/${model.id}")
         if (model.id == activeModelInfo?.id) closeInternal()
-        modelDir.deleteRecursively()
+        Result.success(modelDir.deleteRecursively())
     }
 
     fun getDownloadedModels(): List<OfflineModelInfo> {
