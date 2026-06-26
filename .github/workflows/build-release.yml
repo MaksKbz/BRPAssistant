@@ -21,18 +21,14 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Validate Gradle wrapper
-        uses: gradle/wrapper-validation-action@v3
-
-      # Release-сборка с debug-подписью.
-      # signingConfig не задан в build.gradle.kts, поэтому
-      # assembleRelease выдаёт unsigned APK — подписываем
-      # debug-ключом через apksigner.
-      # Цель: проверить что R8/ProGuard не ломает сборку
-      # и получить устанавливаемый APK.
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace
         env:
@@ -40,7 +36,6 @@ jobs:
 
       - name: Sign APK with debug key
         run: |
-          # Генерируем debug keystore
           keytool -genkey -v \
             -keystore debug.jks \
             -alias androiddebugkey \
@@ -50,12 +45,11 @@ jobs:
             -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # Находим unsigned APK
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
           echo "Found APK: $APK"
 
-          # Подписываем
-          $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner sign \
+          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner sign \
             --ks debug.jks \
             --ks-key-alias androiddebugkey \
             --ks-pass pass:android \
@@ -63,24 +57,15 @@ jobs:
             --out app-release-signed.apk \
             "$APK"
 
-          echo "APK signed successfully"
+          echo "Signed APK size:"
           ls -lh app-release-signed.apk
 
       - name: Verify APK signature
         run: |
-          $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner verify \
-            --verbose app-release-signed.apk
+          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner verify --verbose app-release-signed.apk
 
-      - name: Show APK info
-        run: |
-          echo "=== APK size ==="
-          ls -lh app-release-signed.apk
-          echo "=== Build outputs ==="
-          find app/build/outputs -type f -name "*.apk" | xargs ls -lh 2>/dev/null || true
-          echo "=== Mapping file (ProGuard) ==="
-          find app/build/outputs/mapping -type f 2>/dev/null | head -5 || echo "No mapping file found"
-
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: BRPAssistant-release-${{ github.run_number }}
