@@ -24,8 +24,17 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Fix gradle.properties line endings
+        run: |
+          sed -i 's/\r//' gradle.properties
+          echo "gradle.properties content:"
+          cat -A gradle.properties
+
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_android_useAndroidX: 'true'
+          JAVA_TOOL_OPTIONS: '-Xmx2048m'
 
       - name: Sign APK with debug key
         run: |
