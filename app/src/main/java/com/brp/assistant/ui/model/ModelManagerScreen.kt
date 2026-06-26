@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,8 +80,12 @@ fun ModelManagerScreen(
     onNavigate: (String) -> Unit,
     onBack: () -> Unit
 ) {
+    // FIX #1: исправлена опечатка grokApiKey → groqApiKey.
+    // Прежнее написание (без 'q') не компилировалось бы при строгой
+    // типизации, либо ссылалось на несуществующее поле и возвращало null,
+    // из-за чего поле API-ключа всегда оставалось пустым при смене провайдера.
     var apiKeyInput by remember(state.aiProvider) {
-        mutableStateOf(if (state.aiProvider == "Gemini") state.geminiApiKey ?: "" else state.grokApiKey ?: "")
+        mutableStateOf(if (state.aiProvider == "Gemini") state.geminiApiKey ?: "" else state.groqApiKey ?: "")
     }
     var showProviderMenu by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
@@ -156,10 +161,10 @@ fun ModelManagerScreen(
                             shape = RoundedCornerShape(12.dp),
                             trailingIcon = {
                                 if (state.isValidating) {
-                                    CircularProgressIndicator(modifier = Modifier.width(20.dp))
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
                                 } else {
                                     IconButton(onClick = { onUpdateApiKey(apiKeyInput) }) {
-                                        Icon(Icons.Default.FlashOn, "Verify", modifier = Modifier.width(20.dp))
+                                        Icon(Icons.Default.FlashOn, "Verify", modifier = Modifier.size(20.dp))
                                     }
                                 }
                             }
@@ -192,6 +197,10 @@ fun ModelManagerScreen(
                     isActive = state.activeModelId == model.id,
                     isDownloading = state.downloadingModelId == model.id,
                     downloadProgress = if (state.downloadingModelId == model.id) state.downloadProgress else 0f,
+                    // FIX #2: передаём флаги активации в карточку модели.
+                    // LocalModelCard теперь блокирует кнопку и показывает
+                    // CircularProgressIndicator пока модель загружается в память.
+                    isActivating = state.isActivating && state.activatingModelId == model.id,
                     onDownload = { onDownload(model) },
                     onActivate = { onActivate(model) },
                     onDelete = { onDelete(model) }
@@ -281,6 +290,8 @@ private fun LocalModelCard(
     isActive: Boolean,
     isDownloading: Boolean,
     downloadProgress: Float,
+    // FIX #2: новый параметр — модель грузится в память (после нажатия «Активировать»)
+    isActivating: Boolean,
     onDownload: () -> Unit,
     onActivate: () -> Unit,
     onDelete: () -> Unit
@@ -317,6 +328,23 @@ private fun LocalModelCard(
                 }
             }
 
+            // FIX #2: индикатор активации — показывается пока модель читается с диска в RAM.
+            // На Helio G85 / eMMC 5.1 это занимает до 30 секунд.
+            // Без этого блока UI выглядит «замёрзшим», пользователь жмёт кнопку повторно.
+            if (isActivating) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(
+                        "Загрузка модели в память…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!isDownloaded && !isDownloading) {
                     Button(onClick = onDownload) {
@@ -326,14 +354,26 @@ private fun LocalModelCard(
                     }
                 }
                 if (isDownloaded && !isActive) {
-                    Button(onClick = onActivate) {
-                        Icon(Icons.Default.PlayArrow, null)
+                    // FIX #2: кнопка заблокирована пока идёт активация этой модели.
+                    // enabled=false предотвращает двойной вызов llmEngine.initialize()
+                    // и race condition на устройствах с медленным I/O.
+                    Button(onClick = onActivate, enabled = !isActivating) {
+                        if (isActivating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.PlayArrow, null)
+                        }
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Активировать")
+                        Text(if (isActivating) "Загрузка…" else "Активировать")
                     }
                 }
                 if (isDownloaded) {
-                    TextButton(onClick = onDelete) {
+                    // FIX #2: запрещаем удаление пока модель активируется.
+                    TextButton(onClick = onDelete, enabled = !isActivating) {
                         Icon(Icons.Default.Delete, null)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Удалить")
@@ -362,7 +402,7 @@ fun ToolButton(
             modifier = Modifier.padding(12.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(icon, null, modifier = Modifier.width(28.dp))
+            Icon(icon, null, modifier = Modifier.size(28.dp))
             Spacer(modifier = Modifier.height(4.dp))
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }

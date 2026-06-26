@@ -103,6 +103,14 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                 attempt++
                 Log.e(TAG, "Attempt $attempt failed for ${model.id}: ${e.message}")
                 if (attempt >= maxRetry) {
+                    // FIX #3: если все попытки провалились — удаляем битый .part файл.
+                    // Без этого при следующем запуске downloader находил .part файл,
+                    // видел partialBytes > 0, отправлял Range-заголовок и мог получить
+                    // 416 Range Not Satisfiable или склеить повреждённые куски.
+                    if (tempFile.exists()) {
+                        val deleted = tempFile.delete()
+                        Log.w(TAG, "Deleted corrupt .part file for ${model.id}: $deleted")
+                    }
                     emit(ModelDownloadState.Error(model.id, "Ошибка загрузки: ${e.localizedMessage}. Проверьте соединение или попробуйте другую модель.", e))
                 } else {
                     delay(2000L * attempt)
@@ -221,6 +229,16 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                         percent          = percent
                     ))
                 }
+
+                // FIX #4: явный flush + fsync перед rename.
+                // На устройствах с eMMC 5.1 (Redmi 9, Realme C21) и некоторых
+                // UFS 2.1 (Samsung A32) ядро может не сбросить page cache на диск
+                // до вызова renameTo(). В результате после rename outFile существует,
+                // но содержит нули или усечённые данные — модель крашится при загрузке.
+                // flush() сбрасывает Java-буфер → FileDescriptor, fsync() гарантирует
+                // физическую запись на носитель до переименования.
+                output.flush()
+                output.fd.sync()
             }
         }
 
