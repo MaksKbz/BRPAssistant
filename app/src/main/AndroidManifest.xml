@@ -22,7 +22,22 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.BRPAssistant">
+            android:theme="@style/Theme.BRPAssistant"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density">
+            <!--
+                resizeableActivity="true":
+                  Явно разрешает multi-window и free-form режим.
+                  Без этого на планшетах/фолдаблах система может запустить
+                  приложение в compatibility window, игнорируя WindowSizeClass
+                  и отключая адаптивную навигацию (NavigationRail).
+
+                configChanges:
+                  Объявляем, что Activity сама обрабатывает эти изменения конфигурации
+                  вместо пересоздания. Compose + WindowSizeClass реагируют на них
+                  автоматически через collectAsStateWithLifecycle, поэтому
+                  пересоздание Activity не нужно и только замедляет UX.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

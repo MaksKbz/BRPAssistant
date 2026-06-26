@@ -19,8 +19,13 @@ object DatabaseModule {
         Room.databaseBuilder(context, BrpDatabase::class.java, "brp_assistant.db")
             // v1-v4: данные из assets — пересев безопасен
             .fallbackToDestructiveMigrationFrom(1, 2, 3)
-            // v4→v5: полноценная миграция — история чатов сохраняется
+            // v4→v5: добавлены таблицы chat_sessions + chat_messages
             .addMigrations(MIGRATION_4_5)
+            // v5→v6: добавлен столбец vehicleName в chat_sessions
+            // FIX: MIGRATION_5_6 ранее не была зарегистрирована —
+            // при обновлении APK с v5 на v6 Room бросал исключение
+            // IllegalStateException: A migration from 5 to 6 was required
+            .addMigrations(MIGRATION_5_6)
             .build()
 
     @Provides fun provideModelDao(db: BrpDatabase): ModelDao = db.modelDao()

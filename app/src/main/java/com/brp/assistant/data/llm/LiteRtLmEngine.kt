@@ -121,6 +121,11 @@ class LiteRtLmEngine @Inject constructor(
     /**
      * Блокирующий вариант генерации — собирает полный ответ.
      * Используется как fallback там, где Flow не поддерживается.
+     *
+     * FIX: catch (e: Exception) → catch (e: Throwable).
+     * OutOfMemoryError во время нативного инференса является Error,
+     * а не Exception — ранее не перехватывался, что приводило к крэшу
+     * на устройствах с 3 ГБ RAM при запуске Qwen3-1.7B и выше.
      */
     suspend fun generateResponse(
         prompt: String,
@@ -132,9 +137,15 @@ class LiteRtLmEngine @Inject constructor(
             generateResponseStreaming(prompt, systemPrompt, onPartial)
                 .collect { token -> sb.append(token) }
             Result.success(sb.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "generateResponse failed", e)
-            Result.failure(e)
+        } catch (e: Throwable) {
+            val userMsg = when (e) {
+                is OutOfMemoryError ->
+                    "Недостаточно памяти для генерации ответа. " +
+                    "Попробуйте более лёгкую модель (Qwen3-0.6B) или перезапустите приложение."
+                else -> e.message ?: "Ошибка генерации"
+            }
+            Log.e(TAG, "generateResponse failed: $userMsg", e)
+            Result.failure(RuntimeException(userMsg, e))
         }
     }
 
