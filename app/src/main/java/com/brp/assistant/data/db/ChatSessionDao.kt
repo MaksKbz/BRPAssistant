@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatSessionDao {
 
-    // ── Сессии ────────────────────────────────────────────────────────────────
+    // ── Сессии ───────────────────────────────────────────────────────────────────────────────
 
     /** Реактивный поток всех сессий — UI обновляется автоматически при любом изменении. */
     @Query("SELECT * FROM chat_sessions ORDER BY updatedAt DESC")
@@ -35,18 +35,31 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions")
     suspend fun deleteAllSessions()
 
-    // ── Сообщения ─────────────────────────────────────────────────────────────
+    // ── Сообщения ───────────────────────────────────────────────────────────────────────
 
     /** Все сообщения сессии в хронологическом порядке. */
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessages(sessionId: String): List<ChatMessageEntity>
 
     /**
-     * Bulk-insert с REPLACE — идемпотентен при повторных вызовах.
-     * Используется в persistMessages() после каждого ответа LLM.
+     * Bulk-insert с REPLACE — идемпотенен при повторных вызовах.
+     * Оставлен для обратной совместимости и полной перезаписи в легаци-сценариях.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)
+
+    /**
+     * FIX #3: дельта-сохранение одного сообщения с IGNORE.
+     *
+     * Используется в ChatViewModel.persistMessages() для сохранения двух новых
+     * сообщений (вопрос + ответ) вместо перезаписи всей сессии.
+     *
+     * IGNORE: если сообщение уже есть в БД (по id) — пропускаем. Такое поведение
+     * правильно для сообщений с единственным UUID: повторная запись — это
+     * одно и то же сообщение, а не обновлённое.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMessage(message: ChatMessageEntity)
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessages(sessionId: String)
