@@ -149,6 +149,11 @@ class LlmInferenceEngine @Inject constructor(
      * Генерирует ответ, прозрачно делегируя активному движку.
      * Системный промпт передаётся в LiteRT-LM нативно;
      * MediaPipe получает его как часть уже построенного [prompt].
+     *
+     * FIX: catch (e: Throwable) вместо catch (e: Exception) —
+     * OutOfMemoryError во время генерации токенов на JNI-слое MediaPipe
+     * является Error, а не Exception, и ранее не перехватывался,
+     * что приводило к крэшу на устройствах с 3 ГБ RAM.
      */
     suspend fun generateResponse(
         prompt: String,
@@ -167,8 +172,16 @@ class LlmInferenceEngine @Inject constructor(
                         val response = inference.generateResponse(prompt)
                         withContext(Dispatchers.Main) { onPartial(response) }
                         Result.success(response)
-                    } catch (e: Exception) {
-                        Result.failure(e)
+                    } catch (e: Throwable) {
+                        // Перехватываем Throwable (включая OutOfMemoryError и нативные крэши)
+                        val userMsg = when (e) {
+                            is OutOfMemoryError ->
+                                "Недостаточно памяти для генерации ответа. " +
+                                "Попробуйте более лёгкую модель или освободите RAM."
+                            else -> e.message ?: "Ошибка генерации"
+                        }
+                        Log.e(TAG, "generateResponse failed: $userMsg", e)
+                        Result.failure(RuntimeException(userMsg, e))
                     }
                 }
             }
