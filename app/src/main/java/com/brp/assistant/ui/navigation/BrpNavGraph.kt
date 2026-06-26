@@ -53,9 +53,6 @@ private val bottomScreens = listOf(
     Screen.Home, Screen.Diagnose, Screen.AccessoryShop, Screen.VehicleSelect
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavItem: иконка + экран, используется и в BottomBar, и в NavigationRail
-// ─────────────────────────────────────────────────────────────────────────────
 private data class NavItem(
     val screen: Screen,
     val iconContent: @Composable () -> Unit
@@ -73,11 +70,6 @@ private val navItems = listOf(
 fun BrpNavGraph(
     navController: NavHostController     = rememberNavController(),
     mainViewModel: MainViewModel         = hiltViewModel(),
-    /**
-     * Передаётся из MainActivity через calculateWindowSizeClass().
-     * Compact  → телефон  → BottomNavigationBar
-     * Medium / Expanded → планшет/фолдабл → NavigationRail
-     */
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -86,9 +78,6 @@ fun BrpNavGraph(
     val showNav = currentRoute in bottomScreens.map { it.route } ||
             currentRoute?.startsWith("chat/") == true
 
-    // Compact  = телефон  (<600dp)
-    // Medium   = планшет в портретном / фолдабл разложенный (600..840dp)
-    // Expanded = планшет в ландшафте / Fold (>840dp)
     val useRail = widthSizeClass != WindowWidthSizeClass.Compact
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
@@ -98,7 +87,6 @@ fun BrpNavGraph(
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
     if (useRail && showNav) {
-        // ── Планшет / фолдабл: NavigationRail слева ────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxSize()
@@ -107,7 +95,6 @@ fun BrpNavGraph(
             NavigationRail(
                 modifier = Modifier.fillMaxHeight(),
                 header = {
-                    // Лого BRP в шапке рейла
                     Icon(
                         imageVector = Icons.Default.TwoWheeler,
                         contentDescription = "BRP",
@@ -151,10 +138,7 @@ fun BrpNavGraph(
             )
         }
     } else {
-        // ── Телефон: BottomNavigationBar ───────────────────────────────────────────────
         Scaffold(
-            // FIX: safeDrawing insets — BottomNavBar не перекрывается системной
-            // полосой жестовой навигации на Android 10+ gesture mode
             contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 if (showNav) {
@@ -193,13 +177,6 @@ fun BrpNavGraph(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavHostContent ─ отдельный композабл, чтобы не дублировать NavHost
-// между ветками Rail (планшет) и BottomBar (телефон)
-// FIX: добавлен widthSizeClass параметр — теперь передаётся в HomeScreen,
-// чтобы планшетный 2-колоночный layout и QuickDiagnoseStrip реально активировались.
-// Раньше widthSizeClass не проходил дальше BrpNavGraph.
-// ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NavHostContent(
@@ -223,7 +200,6 @@ private fun NavHostContent(
                 selectedVehicleName = selectedVehicleName,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
-                // FIX: теперь widthSizeClass действительно передаётся в HomeScreen
                 widthSizeClass      = widthSizeClass,
                 onSetTheme          = { mainViewModel.setAppTheme(it) },
                 onNavigate          = { route -> navController.navigate(route) }
@@ -301,6 +277,9 @@ private fun NavHostContent(
                 }
             }
 
+            // FIX: widthSizeClass передан в ChatScreen — двухпанельный layout
+            // на планшетах теперь активируется корректно.
+            // sessionHistory / onSelectSession / onNewChat подключены к chatVm.
             ChatScreen(
                 title                  = when (mode) { "diagnosis" -> "Диагностика"; "accessory" -> "Аксессуары"; else -> "Чат" },
                 messages               = state.messages,
@@ -319,7 +298,13 @@ private fun NavHostContent(
                 onResetLlm             = { chatVm.resetLlmSelection() },
                 onSend                 = { msg -> chatVm.sendMessage(msg, mode, selectedVehicleId) },
                 onNavigate             = { route -> navController.navigate(route) },
-                onBack                 = { navController.popBackStack() }
+                onBack                 = { navController.popBackStack() },
+                // ── новые параметры планшетного layout ──────────────────────────────────
+                widthSizeClass         = widthSizeClass,
+                sessionHistory         = state.sessionHistory,
+                selectedSessionId      = state.selectedSessionId,
+                onSelectSession        = { id -> chatVm.loadSession(id) },
+                onNewChat              = { chatVm.startNewChat(selectedVehicleId, mode) }
             )
         }
         composable(Screen.Diagnose.route) {
