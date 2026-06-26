@@ -16,9 +16,11 @@ import com.brp.assistant.domain.model.RetrievalMode
 import com.brp.assistant.domain.usecase.ChatUseCase
 import com.brp.assistant.domain.usecase.DiagnoseUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -295,11 +297,14 @@ class ChatViewModel @Inject constructor(
                 persistMessages(sessionId, resolvedVehicleName)
 
             } catch (oom: OutOfMemoryError) {
+                // FIX: System.gc() перенесён в Dispatchers.Default —
+                // вызов на Main thread вызывал краткий ANR (200-600 мс)
+                // на устройствах с Helio G85 / Dimensity 700 / SD 680.
                 val oomMsg = "💾 Модель не поместилась в память устройства. " +
                         "Попробуйте более лёгкую модель или перезапустите приложение."
                 _state.update { it.copy(isGenerating = false, error = oomMsg) }
                 updateLastMessage(oomMsg)
-                System.gc()
+                withContext(Dispatchers.Default) { System.gc() }
             } catch (e: Exception) {
                 val errMsg = e.message ?: "Неизвестная ошибка выполнения"
                 _state.update { it.copy(isGenerating = false, error = errMsg) }
@@ -376,7 +381,13 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * FIX: epochMillis == 0L возвращает "Неизвестно" вместо "1 января 1970".
+     * Нулевой epoch появляется при миграции старых сессий или ошибке записи
+     * updatedAt в БД — без этой проверки пользователь видел некорректную дату.
+     */
     private fun formatDateLabel(epochMillis: Long): String {
+        if (epochMillis == 0L) return "Неизвестно"
         val msgDate   = Instant.ofEpochMilli(epochMillis)
             .atZone(ZoneId.systemDefault()).toLocalDate()
         val today     = LocalDate.now()
