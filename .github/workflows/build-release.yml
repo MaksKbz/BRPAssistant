@@ -19,22 +19,32 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
+
+      - name: Download gradle-wrapper.jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -fsSL \
+            "https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradle/wrapper/gradle-wrapper.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+          echo "gradle-wrapper.jar downloaded: $(ls -lh gradle/wrapper/gradle-wrapper.jar)"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: gradle-
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Fix gradle.properties line endings
-        run: |
-          sed -i 's/\r//' gradle.properties
-          echo "gradle.properties content:"
-          cat -A gradle.properties
-
       - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace --no-daemon
-        env:
-          ORG_GRADLE_PROJECT_android_useAndroidX: 'true'
-          JAVA_TOOL_OPTIONS: '-Xmx2048m'
+        run: ./gradlew assembleRelease --stacktrace --no-daemon --warning-mode all
+
+      - name: List APK outputs
+        run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'
 
       - name: Sign APK with debug key
         run: |
@@ -45,13 +55,17 @@ jobs:
             -validity 10000 \
             -storepass android \
             -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
+            -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null
 
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-          echo "Found APK: $APK"
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found!"
+            exit 1
+          fi
+          echo "Signing: $APK"
 
-          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
-          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner sign \
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
             --ks debug.jks \
             --ks-key-alias androiddebugkey \
             --ks-pass pass:android \
@@ -59,20 +73,20 @@ jobs:
             --out app-release-signed.apk \
             "$APK"
 
-          echo "Signed APK size:"
+          echo "=== Signed APK ==="
           ls -lh app-release-signed.apk
 
-      - name: Verify APK signature
+      - name: Verify APK
         run: |
-          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
-          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner verify --verbose app-release-signed.apk
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose app-release-signed.apk
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: BRPAssistant-release-${{ github.run_number }}
           path: app-release-signed.apk
-          retention-days: 14
+          retention-days: 30
 
       - name: Upload ProGuard mapping
         uses: actions/upload-artifact@v4
@@ -80,4 +94,16 @@ jobs:
         with:
           name: proguard-mapping-${{ github.run_number }}
           path: app/build/outputs/mapping/
-          retention-days: 14
+          retention-days: 30
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Run: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          APK=$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)
+          if [ -n "$APK" ]; then
+            SIZE=$(ls -lh "$APK" | awk '{print $5}')
+            echo "- APK size: $SIZE" >> $GITHUB_STEP_SUMMARY
+          fi
