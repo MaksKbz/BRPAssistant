@@ -15,8 +15,8 @@ android {
         applicationId = "com.brp.assistant"
         minSdk = 30
         targetSdk = 35
-        versionCode = 23
-        versionName = "2.2.0"
+        versionCode = 24
+        versionName = "2.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -102,8 +102,12 @@ dependencies {
     // Документация: https://developers.google.com/edge/litert-lm/android
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.1.1")
 
-    // Устаревший движок (llmedge) — оставлен для совместимости
-    implementation("io.github.aatricks:llmedge:0.4.0beta")
+    // УДАЛЕНО: io.github.aatricks:llmedge:0.4.0beta — legacy-движок, не используется в коде
+
+    // ── Adaptive UI ─────────────────────────────────────────────────────────────────────
+
+    // WindowSizeClass для адаптивной верстки: телефон / планшет / раскладной
+    implementation("androidx.compose.material3:material3-window-size-class:1.3.2")
 
     // ── Coroutines ──────────────────────────────────────────────────────────────────────
     implementation(libs.kotlinx.coroutines.android)
@@ -111,8 +115,9 @@ dependencies {
     // DataStore (неконфиденциальные настройки: theme, provider, temperature и т.д.)
     implementation(libs.androidx.datastore.preferences)
 
-    // Security Crypto (шифрование API-ключей через EncryptedSharedPreferences)
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Security Crypto — стабильная версия вместо alpha06
+    // Шифрование API-ключей через EncryptedSharedPreferences
+    implementation("androidx.security:security-crypto:1.0.0")
 
     // Serialization
     implementation(libs.kotlinx.serialization.json)

@@ -20,16 +20,20 @@ import javax.inject.Singleton
  *
  *   [ModelFormat.TASK]      → MediaPipe LlmInference API
  *                             Файлы: *.task, *.tflite
- *                             Зависимость: com.google.mediapipe:tasks-genai
  *
  *   [ModelFormat.LITERTLM]  → LiteRtLmEngine
  *                             Файлы: *.litertlm
- *                             Зависимость: com.google.ai.edge.litertlm:litertlm-android
- *                             Даёт доступ к Qwen3, Gemma4 и другим новым моделям
- *                             с поддержкой NPU, Tool Use, мультимодальности.
+ *                             Даёт доступ к Qwen3, Gemma4 и другим новым моделям.
  *
  * Внешний код (ViewModel, UseCase) работает с этим классом напрямую —
  * детали выбора движка полностью скрыты.
+ *
+ * Защиты от отказов:
+ * - RamGuard проверяет доступную RAM до инициализации;
+ * - EngineResult.runSafe() перехватывает OutOfMemoryError и Throwable;
+ * - Mutex исключает параллельный init/close;
+ * - closeInternal() вызывается при любой ошибке инита, чтобы не оставлять движок
+ *   в неопределённом состоянии.
  */
 @Singleton
 class LlmInferenceEngine @Inject constructor(
@@ -43,11 +47,9 @@ class LlmInferenceEngine @Inject constructor(
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
-        /** Все поддерживаемые расширения — оба движка */
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
     }
 
-    // ── MediaPipe движок (TASK) ──────────────────────────────────────────────
     private var mediaPipeInference: LlmInference? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -60,6 +62,10 @@ class LlmInferenceEngine @Inject constructor(
 
     private val _isInitialized = MutableStateFlow(false)
     val isInitializedFlow: StateFlow<Boolean> = _isInitialized.asStateFlow()
+
+    /** Последний результат инициализации — для UI (предупреждения о RAM и т.д.) */
+    private val _lastEngineResult = MutableStateFlow<EngineResult<Unit>?>(null)
+    val lastEngineResult: StateFlow<EngineResult<Unit>?> = _lastEngineResult.asStateFlow()
 
     init {
         scope.launch {
@@ -76,80 +82,100 @@ class LlmInferenceEngine @Inject constructor(
 
     // ── Инициализация ───────────────────────────────────────────────────
 
-    suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
+    suspend fun initialize(model: OfflineModelInfo): EngineResult<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
-            try {
-                closeInternal()
-                val modelFile = getModelFile(model)
+            closeInternal()
 
-                if (!modelFile.exists()) {
-                    return@withContext Result.failure(
-                        Exception("Файл модели не найден: ${modelFile.absolutePath}")
-                    )
-                }
-
-                val ext = modelFile.extension.lowercase()
-                if (ext !in SUPPORTED_EXTENSIONS) {
-                    return@withContext Result.failure(
-                        Exception(
-                            "Неподдерживаемый формат модели: .${ext}\n" +
-                            "Поддерживаются: .task, .tflite, .litertlm"
-                        )
-                    )
-                }
-
-                // ── Роутинг по формату ─────────────────────────────────
-                val result = when (model.format) {
-                    ModelFormat.LITERTLM -> {
-                        Log.i(TAG, "Routing to LiteRtLmEngine: ${model.title}")
-                        liteRtLmEngine.initialize(model, modelFile)
-                    }
-                    ModelFormat.TASK -> {
-                        Log.i(TAG, "Routing to MediaPipe: ${model.title}")
-                        initMediaPipe(modelFile)
-                    }
-                }
-
-                if (result.isSuccess) {
-                    activeModelInfo = model
-                    _isInitialized.value = true
-                    _activeModelId.value = model.id
-                    settingsRepository.setActiveModelId(model.id)
-                } else {
-                    _isInitialized.value = false
-                }
-                result
-
-            } catch (e: Throwable) {
-                Log.e(TAG, "Init failed", e)
-                _isInitialized.value = false
-                Result.failure(e)
+            val modelFile = getModelFile(model)
+            if (!modelFile.exists()) {
+                val err = EngineResult.EngineError(
+                    cause = Exception("Файл модели не найден: ${modelFile.absolutePath}")
+                )
+                _lastEngineResult.value = err
+                return@withContext err
             }
+
+            val ext = modelFile.extension.lowercase()
+            if (ext !in SUPPORTED_EXTENSIONS) {
+                val err = EngineResult.EngineError(
+                    cause = Exception(
+                        "Неподдерживаемый формат: .${ext}. Поддерживаются: .task, .tflite, .litertlm"
+                    )
+                )
+                _lastEngineResult.value = err
+                return@withContext err
+            }
+
+            // ── Проверка RAM ───────────────────────────────────────────
+            val availableMb = RamGuard.availableRamMb(context)
+            when (val ramCheck = RamGuard.check(context, model.approxSizeMb)) {
+                is RamGuard.RamCheckResult.Critical -> {
+                    Log.e(TAG, "RAM check CRITICAL: ${ramCheck.errorMessage}")
+                    val err = EngineResult.EngineError(
+                        cause = Exception(ramCheck.errorMessage)
+                    )
+                    _lastEngineResult.value = err
+                    return@withContext err
+                }
+                is RamGuard.RamCheckResult.Low -> {
+                    Log.w(TAG, "RAM check LOW: ${ramCheck.warningMessage}")
+                    // Не блокируем, но предупреждаем через lastEngineResult
+                }
+                is RamGuard.RamCheckResult.Ok -> {
+                    Log.d(TAG, "RAM check OK: available=${ramCheck.availableMb}MB")
+                }
+            }
+
+            // ── Роутинг по формату с OOM-защитой ─────────────────────
+            val result: EngineResult<Unit> = when (model.format) {
+                ModelFormat.LITERTLM -> {
+                    Log.i(TAG, "Routing to LiteRtLmEngine: ${model.title}")
+                    EngineResult.runSafe(model.approxSizeMb, availableMb) {
+                        liteRtLmEngine.initialize(model, modelFile).getOrThrow()
+                    }
+                }
+                ModelFormat.TASK -> {
+                    Log.i(TAG, "Routing to MediaPipe: ${model.title}")
+                    initMediaPipeSafe(modelFile, model.approxSizeMb, availableMb)
+                }
+            }
+
+            _lastEngineResult.value = result
+
+            if (result.isSuccess) {
+                activeModelInfo = model
+                _isInitialized.value = true
+                _activeModelId.value = model.id
+                settingsRepository.setActiveModelId(model.id)
+                Log.i(TAG, "Engine initialized: ${model.title}")
+            } else {
+                closeInternal()
+                Log.e(TAG, "Engine init failed: $result")
+            }
+
+            result
         }
     }
 
-    private fun initMediaPipe(modelFile: File): Result<Unit> {
-        return try {
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelFile.absolutePath)
-                .setMaxTokens(MAX_TOKENS)
-                .setTemperature(DEFAULT_TEMP)
-                .build()
-            mediaPipeInference = LlmInference.createFromOptions(context, options)
-            Result.success(Unit)
-        } catch (e: Throwable) {
-            Log.e(TAG, "MediaPipe init failed", e)
-            Result.failure(e)
-        }
+    /**
+     * Инициализация MediaPipe с полным перехватом OOM и Throwable.
+     * [OutOfMemoryError] превращается в [EngineResult.OomError] для UI.
+     */
+    private fun initMediaPipeSafe(
+        modelFile: File,
+        modelSizeMb: Int,
+        availableMb: Long
+    ): EngineResult<Unit> = EngineResult.runSafe(modelSizeMb, availableMb) {
+        val options = LlmInference.LlmInferenceOptions.builder()
+            .setModelPath(modelFile.absolutePath)
+            .setMaxTokens(MAX_TOKENS)
+            .setTemperature(DEFAULT_TEMP)
+            .build()
+        mediaPipeInference = LlmInference.createFromOptions(context, options)
     }
 
     // ── Генерация ответа ────────────────────────────────────────────────
 
-    /**
-     * Генерирует ответ, прозрачно делегируя активному движку.
-     * Системный промпт передаётся в LiteRT-LM нативно;
-     * MediaPipe получает его как часть уже построенного [prompt].
-     */
     suspend fun generateResponse(
         prompt: String,
         onPartial: (String) -> Unit,
@@ -167,6 +193,12 @@ class LlmInferenceEngine @Inject constructor(
                         val response = inference.generateResponse(prompt)
                         withContext(Dispatchers.Main) { onPartial(response) }
                         Result.success(response)
+                    } catch (oom: OutOfMemoryError) {
+                        Log.e(TAG, "OOM during inference", oom)
+                        Result.failure(Exception(
+                            "Нехватка памяти во время генерации ответа. " +
+                            "Попробуйте выбрать модель меньшего размера."
+                        ))
                     } catch (e: Exception) {
                         Result.failure(e)
                     }
@@ -185,20 +217,12 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     fun getActiveModelId(): String? = activeModelInfo?.id
-
-    fun getActivePromptStyle(): PromptStyle =
-        activeModelInfo?.promptStyle ?: PromptStyle.CHATML
+    fun getActivePromptStyle(): PromptStyle = activeModelInfo?.promptStyle ?: PromptStyle.CHATML
 
     // ── Жизненный цикл ──────────────────────────────────────────────────
 
     suspend fun close() = mutex.withLock { closeInternal() }
 
-    /**
-     * FIX #3: раньше destroy() вызывал closeInternal() напрямую, без mutex,
-     * что приводило к race condition если одновременно выполнялся initialize().
-     * Теперь: scope.cancel() прекращает все корутины, затем
-     * runBlocking блокирует поток владельца до получения mutex.
-     */
     fun destroy() {
         scope.cancel()
         @Suppress("BlockingMethodInNonBlockingContext")
@@ -209,9 +233,9 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun closeInternal() {
-        try { mediaPipeInference?.close() } catch (e: Throwable) {}
+        try { mediaPipeInference?.close() } catch (e: Throwable) { Log.w(TAG, "Error closing MediaPipe", e) }
         mediaPipeInference = null
-        liteRtLmEngine.close()
+        try { liteRtLmEngine.close() } catch (e: Throwable) { Log.w(TAG, "Error closing LiteRtLm", e) }
         _isInitialized.value = false
         activeModelInfo = null
         _activeModelId.value = null
@@ -219,12 +243,6 @@ class LlmInferenceEngine @Inject constructor(
 
     // ── Файловые утилиты ──────────────────────────────────────────────────
 
-    /**
-     * FIX #3: унифицирован путь модели.
-     * Раньше: getExternalFilesDir(null) использовался здесь,
-     * а PublicHuggingFaceModelDownloader также сохранял в getExternalFilesDir(null).
-     * Оба класса теперь единообразно используют getExternalFilesDir(null) ?: filesDir.
-     */
     fun getModelFile(model: OfflineModelInfo): File {
         val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
         val modelDir = File(baseDir, "models/${model.id}")
