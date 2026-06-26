@@ -1,5 +1,6 @@
 package com.brp.assistant.ui.navigation
 
+import android.content.res.Configuration
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import androidx.compose.foundation.layout.*
@@ -12,6 +13,7 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -87,9 +89,20 @@ fun BrpNavGraph(
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
+    // FIX #6: 7" планшеты в portrait дают Compact (360-599dp), в landscape — Medium.
+    // Переворот менял паттерн навигации с BottomBar на Rail, вызывая дезориентацию.
+    // Если ширина >= 480dp, принудительно используем Medium независимо от WindowWidthSizeClass.
+    val configuration = LocalConfiguration.current
+    val effectiveSizeClass = when {
+        widthSizeClass == WindowWidthSizeClass.Expanded -> WindowWidthSizeClass.Expanded
+        widthSizeClass == WindowWidthSizeClass.Medium   -> WindowWidthSizeClass.Medium
+        configuration.screenWidthDp >= 480              -> WindowWidthSizeClass.Medium
+        else                                             -> WindowWidthSizeClass.Compact
+    }
+
     when {
         // ── EXPANDED (планшеты ≥840dp): постоянный NavigationDrawer + панель сессий ───
-        widthSizeClass == WindowWidthSizeClass.Expanded && showNav -> {
+        effectiveSizeClass == WindowWidthSizeClass.Expanded && showNav -> {
             ExpandedLayout(
                 navController       = navController,
                 mainViewModel       = mainViewModel,
@@ -99,11 +112,11 @@ fun BrpNavGraph(
                 selectedVehicle     = selectedVehicle,
                 activeModelName     = activeModelName,
                 currentTheme        = currentTheme,
-                widthSizeClass      = widthSizeClass
+                widthSizeClass      = effectiveSizeClass
             )
         }
         // ── MEDIUM (планшеты/fold ≥600dp): NavigationRail ─────────────────────────────
-        widthSizeClass == WindowWidthSizeClass.Medium && showNav -> {
+        effectiveSizeClass == WindowWidthSizeClass.Medium && showNav -> {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
@@ -121,7 +134,7 @@ fun BrpNavGraph(
                     selectedVehicle     = selectedVehicle,
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
-                    widthSizeClass      = widthSizeClass,
+                    widthSizeClass      = effectiveSizeClass,
                     modifier            = Modifier.weight(1f).fillMaxHeight()
                 )
             }
@@ -160,7 +173,7 @@ fun BrpNavGraph(
                     selectedVehicle     = selectedVehicle,
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
-                    widthSizeClass      = widthSizeClass,
+                    widthSizeClass      = effectiveSizeClass,
                     modifier            = Modifier.padding(innerPadding)
                 )
             }
@@ -170,18 +183,17 @@ fun BrpNavGraph(
 
 /**
  * FIX #7: постоянный NavigationDrawer + панель сессий для Expanded.
+ * FIX #2: chatVm передаётся извне (из NavHostContent через параметр),
+ *         чтобы гарантировать единственный экземпляр ChatViewModel
+ *         для панели сессий в drawer и основного чата.
  *
  * Макет при widthSizeClass.Expanded:
  *
- *  ┌────────────────┬────────────────────────────────────────────────┐
- *  │ NavDrawer   │          Основной контент              │
- *  │  240dp      │                                              │
- *  │             │  если chat/ → панель сессий 280dp        │
- *  │ [Нав пункты] │  + основной чат (weight 1f)         │
- *  │             │                                              │
- *  │ [vehicle]   │                                              │
- *  │ [llm model] │                                              │
- *  └────────────────┴────────────────────────────────────────────────┘
+ *  ┌────────────────┬──────────────────┬────────────────────────────────┐
+ *  │ NavDrawer      │ Панель сессий    │     Основной контент           │
+ *  │  240dp         │  280dp           │     (weight 1f)                │
+ *  │                │  (только chat/)  │                                │
+ *  └────────────────┴──────────────────┴────────────────────────────────┘
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -196,10 +208,13 @@ private fun ExpandedLayout(
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass
 ) {
-    // Получаем сессии из ChatViewModel только когда в chat/-маршруте
+    // FIX #2: chatVm НЕ создаётся здесь через hiltViewModel().
+    // Вместо этого он создаётся в NavHostContent (composable chat/-маршрута)
+    // и передаётся сюда через SharedChatVmHolder — единый ViewModelStoreOwner.
+    // Это предотвращает рассинхронизацию состояния между панелью сессий
+    // в ExpandedLayout и основным чатом в NavHostContent.
     val isChatRoute = currentRoute?.startsWith("chat/") == true
-    val chatVm: ChatViewModel? = if (isChatRoute) hiltViewModel() else null
-    val chatState = chatVm?.state?.collectAsStateWithLifecycle()
+    val chatState = SharedChatVmHolder.chatVm?.state?.collectAsStateWithLifecycle()
 
     Row(
         modifier = Modifier
@@ -304,7 +319,8 @@ private fun ExpandedLayout(
         }
 
         // ── Панель сессий 280dp — только в chat/-маршруте ───────────────
-        if (isChatRoute && chatVm != null && chatState != null) {
+        if (isChatRoute && chatState != null) {
+            val vm = SharedChatVmHolder.chatVm
             Surface(
                 modifier      = Modifier
                     .width(280.dp)
@@ -318,7 +334,7 @@ private fun ExpandedLayout(
                 ) {
                     // Кнопка "Новый чат"
                     OutlinedButton(
-                        onClick  = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, "both") },
+                        onClick  = { vm?.startNewChat(selectedVehicleId, selectedVehicleName, "both") },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -344,7 +360,7 @@ private fun ExpandedLayout(
                         items(chatState.value.sessionHistory, key = { it.id }) { session ->
                             val isSelected = session.id == chatState.value.selectedSessionId
                             Surface(
-                                onClick        = { chatVm.loadSession(session.id) },
+                                onClick        = { vm?.loadSession(session.id) },
                                 shape          = MaterialTheme.shapes.small,
                                 color          = if (isSelected)
                                     MaterialTheme.colorScheme.secondaryContainer
@@ -395,10 +411,27 @@ private fun ExpandedLayout(
             selectedVehicle     = selectedVehicle,
             activeModelName     = activeModelName,
             currentTheme        = currentTheme,
-            widthSizeClass      = widthSizeClass,
+            // FIX #1: при Expanded передаём Medium в NavHostContent → ChatScreen,
+            // чтобы внутренняя ChatHistoryPanel (isTablet = Medium) не рендерилась
+            // повторно — панель уже есть в ExpandedLayout выше (560dp дублирования устранено).
+            widthSizeClass      = WindowWidthSizeClass.Medium,
             modifier            = Modifier.weight(1f).fillMaxHeight()
         )
     }
+}
+
+/**
+ * FIX #2: синглтон-холдер для передачи единственного экземпляра ChatViewModel
+ * между ExpandedLayout и NavHostContent без activityViewModel().
+ *
+ * ChatViewModel создаётся в composable(Screen.Chat.route) через hiltViewModel()
+ * (правильный ViewModelStoreOwner — NavBackStackEntry) и сохраняется здесь.
+ * ExpandedLayout читает его через SharedChatVmHolder.chatVm.
+ *
+ * Очищается при выходе из chat/-маршрута (DisposableEffect в NavHostContent).
+ */
+object SharedChatVmHolder {
+    var chatVm: ChatViewModel? = null
 }
 
 @Composable
@@ -529,6 +562,14 @@ private fun NavHostContent(
             }
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
+
+            // FIX #2: регистрируем единственный экземпляр ChatViewModel в холдере,
+            // чтобы ExpandedLayout мог его читать без создания второго экземпляра.
+            // DisposableEffect очищает ссылку при выходе из chat/-маршрута.
+            DisposableEffect(chatVm) {
+                SharedChatVmHolder.chatVm = chatVm
+                onDispose { SharedChatVmHolder.chatVm = null }
+            }
 
             LaunchedEffect(selectedVehicleId, mode) {
                 chatVm.clearForChat(selectedVehicleId, selectedVehicleName, mode)

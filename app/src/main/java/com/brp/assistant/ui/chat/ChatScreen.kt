@@ -1,5 +1,6 @@
 package com.brp.assistant.ui.chat
 
+import android.content.res.Configuration
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -92,7 +94,12 @@ private fun ChatHistoryPanel(
                 )
             }
         } else {
-            val grouped = remember(sessions) { sessions.groupBy { it.dateLabel } }
+            // FIX #4: remember по содержимому (id + dateLabel), а не по ссылке на список.
+            // Без этого при изменении dateLabel (переход через полночь) grouped не
+            // пересчитывается, и сессии остаются в неправильных группах.
+            val grouped = remember(sessions.map { it.id + it.dateLabel }) {
+                sessions.groupBy { it.dateLabel }
+            }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 grouped.forEach { (dateLabel, items) ->
@@ -109,9 +116,13 @@ private fun ChatHistoryPanel(
                     }
                     items(items, key = { it.id }) { session ->
                         val isSelected = session.id == selectedId
+                        // FIX #5: минимальный touch target 48dp (Material Design 3).
+                        // Предыдущий вертикальный padding 10dp давал ~32-34dp на xxxhdpi —
+                        // недостаточно для удобного нажатия на Android Go устройствах.
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 48.dp)
                                 .clickable { onSelectSession(session.id) },
                             color = if (isSelected)
                                 MaterialTheme.colorScheme.primaryContainer
@@ -119,10 +130,10 @@ private fun ChatHistoryPanel(
                                 MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Column(
-                                modifier = Modifier.padding(
-                                    horizontal = 16.dp,
-                                    vertical = 10.dp
-                                )
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.Center
                             ) {
                                 Text(
                                     session.title,
@@ -201,52 +212,66 @@ fun ChatScreen(
         else -> currentOnlineProvider
     }
 
-    val isTablet = widthSizeClass != WindowWidthSizeClass.Compact
+    // FIX #1: isTablet = true только для Medium (планшеты с Rail).
+    // При Expanded — панель сессий уже есть в ExpandedLayout (BrpNavGraph),
+    // туда передаётся WindowWidthSizeClass.Medium, поэтому дублирования нет.
+    val isTablet = widthSizeClass == WindowWidthSizeClass.Medium
+
+    // FIX #7: в landscape на Compact-телефоне TopAppBar скрывается при открытой
+    // клавиатуре, чтобы освободить место для чата (актуально для экранов 20:9
+    // с высотой ~360dp в горизонтальной ориентации).
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val imeVisible = WindowInsets.isImeVisible
+    val hideTopBar = isLandscape && !isTablet && imeVisible
 
     @Composable
     fun ChatContent(modifier: Modifier = Modifier) {
         Column(modifier = modifier.fillMaxSize()) {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(title, style = MaterialTheme.typography.titleMedium)
-                        if (selectedVehicleName != null) {
+            // FIX #7: скрываем TopAppBar в landscape при открытой клавиатуре на Compact
+            if (!hideTopBar) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(title, style = MaterialTheme.typography.titleMedium)
+                            if (selectedVehicleName != null) {
+                                Text(
+                                    selectedVehicleName,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        if (!isTablet) {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.Default.ArrowBack, null)
+                            }
+                        }
+                    },
+                    actions = {
+                        TextButton(
+                            onClick = { showLlmSheet = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.SmartToy,
+                                contentDescription = "Выбрать модель ИИ",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
                             Text(
-                                selectedVehicleName,
-                                style = MaterialTheme.typography.labelSmall
+                                activeLlmLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1
                             )
                         }
-                    }
-                },
-                navigationIcon = {
-                    if (!isTablet) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.Default.ArrowBack, null)
+                        IconButton(onClick = { onNavigate(Screen.Home.route) }) {
+                            Icon(Icons.Default.Home, "Главная")
                         }
                     }
-                },
-                actions = {
-                    TextButton(
-                        onClick = { showLlmSheet = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = "Выбрать модель ИИ",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            activeLlmLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1
-                        )
-                    }
-                    IconButton(onClick = { onNavigate(Screen.Home.route) }) {
-                        Icon(Icons.Default.Home, "Главная")
-                    }
-                }
-            )
+                )
+            }
 
             if (riskLevel != "low") {
                 SafetyBanner(

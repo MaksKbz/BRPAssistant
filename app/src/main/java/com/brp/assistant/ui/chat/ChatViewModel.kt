@@ -16,6 +16,7 @@ import com.brp.assistant.domain.model.RetrievalMode
 import com.brp.assistant.domain.usecase.ChatUseCase
 import com.brp.assistant.domain.usecase.DiagnoseUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -73,6 +74,13 @@ class ChatViewModel @Inject constructor(
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var activeSessionId: String? = null
+
+    /**
+     * FIX #3: хранит текущий job генерации — при повторном sendMessage
+     * предыдущая генерация отменяется, чтобы избежать race condition
+     * и мешанины токенов от двух параллельных потоков.
+     */
+    private var generationJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -209,6 +217,11 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(text: String, mode: String, vehicleId: String?, vehicleName: String? = null) {
+        // FIX #3: отменяем предыдущую генерацию, если она ещё идёт.
+        // Это предотвращает race condition при двойном нажатии «Отправить»
+        // (особенно актуально на планшете с физической клавиатурой).
+        generationJob?.cancel()
+
         val userMsg = ChatMessage(text, MessageRole.USER)
         _state.update { it.copy(messages = it.messages + userMsg, isGenerating = true, error = null) }
 
@@ -217,7 +230,7 @@ class ChatViewModel @Inject constructor(
             else -> vehicleId
         }
 
-        viewModelScope.launch {
+        generationJob = viewModelScope.launch {
             // FIX #5: OOM pre-check — через DeviceCapabilityProvider, без ActivityManager в VM
             val mem = deviceCapability.checkMemory()
             if (!mem.isSafeForGeneration) {
