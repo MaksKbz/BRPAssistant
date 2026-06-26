@@ -17,7 +17,6 @@ import okhttp3.Response
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -44,20 +43,22 @@ sealed class ModelDownloadState {
 
 @Singleton
 class PublicHuggingFaceModelDownloader @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    /**
+     * FIX: ранее создавался собственный OkHttpClient внутри класса,
+     * полностью игнорируя синглтон из AppModule.
+     * Теперь принимаем baseClient из DI и создаём дочерний клиент
+     * через .newBuilder() — без выделения нового thread/connection pool.
+     */
+    baseClient: OkHttpClient
 ) {
     // Мимикрия под браузер для обхода блокировок и корректной работы CDN
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    // FIX #5: followRedirects=true — OkHttp сам следует за редиректами,
-    // поэтому ручная рекурсия в downloadFileInternalWithUrl была избыточной
-    // и опасной при LFS-цепочках редиректов.
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    // Дочерний клиент: наследует таймауты из синглтона, добавляет только followRedirects=true
+    private val client: OkHttpClient = baseClient.newBuilder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.MINUTES)
-        .writeTimeout(10, TimeUnit.MINUTES)
         .build()
 
     private val TAG = "ModelDownloader"
@@ -95,8 +96,8 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                 } else {
                     val encodedFileName = Uri.encode(model.filename)
                     when (attempt) {
-                        0 -> "https://hf-mirror.com/${model.repoId}/resolve/main/${encodedFileName}?download=true"
-                        1 -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
+                        0    -> "https://hf-mirror.com/${model.repoId}/resolve/main/${encodedFileName}?download=true"
+                        1    -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
                         else -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
                     }
                 }
@@ -118,11 +119,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
     }.flowOn(Dispatchers.IO)
 
-    /**
-     * FIX #5: удалён блок isRedirect + рекурсивный вызов самого себя.
-     * OkHttp уже следует за редиректами благодаря followRedirects=true.
-     * При цепочке LFS-редиректов рекурсия могла попасть в бесконечный стек.
-     */
     private fun downloadFileInternalWithUrl(
         url: String,
         model: OfflineModelInfo,
@@ -161,15 +157,12 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             throw IOException("Ошибка сети: ${e.localizedMessage}")
         }
 
-        // FIX #5: блок isRedirect удалён.
-        // OkHttp с followRedirects=true никогда не доставит сюда isRedirect==true,
-        // поэтому рекурсия никогда не срабатывала, но всё равно увеличивала глубину стека.
         try {
             if (!response.isSuccessful && response.code != 206) {
                 when (response.code) {
                     403, 401 -> throw IOException("Доступ запрещен (${response.code}). HF требует авторизации для этой модели.")
-                    416 -> { tempFile.delete(); throw IOException("416 Range Not Satisfiable") }
-                    else -> throw IOException("HTTP ${response.code}: ${response.message}")
+                    416      -> { tempFile.delete(); throw IOException("416 Range Not Satisfiable") }
+                    else     -> throw IOException("HTTP ${response.code}: ${response.message}")
                 }
             }
 
@@ -184,11 +177,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
     }
 
-    /**
-     * FIX #1: убран внешний tempFile.outputStream().use { }
-     * время открывавший второй поток на тот же файл, но не писавший данные.
-     * Теперь только один FileOutputStream с правильным append-флагом.
-     */
     private fun handleStream(
         model: OfflineModelInfo,
         response: Response,
@@ -196,11 +184,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         outFile: File,
         alreadyDownloaded: Long
     ): Flow<ModelDownloadState> = flow {
-        val code = response.code
-        val append = code == 206
+        val append = response.code == 206
 
         if (!append && tempFile.exists()) {
-            // Сервер вернул 200 — дозакачка невозможна
             tempFile.delete()
         }
 
@@ -210,7 +196,6 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             if (append) alreadyDownloaded + contentLength else contentLength
         } else null
 
-        // FIX #1: единственный поток записи — больше нет внешнего outputStream()
         FileOutputStream(tempFile, append).use { output ->
             body.byteStream().use { input ->
                 val buffer = ByteArray(1024 * 64)
@@ -226,11 +211,11 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                     } else null
 
                     emit(ModelDownloadState.Progress(
-                        modelId = model.id,
-                        fileName = model.filename,
-                        downloadedBytes = currentDownloaded,
-                        totalBytes = totalBytes,
-                        percent = percent
+                        modelId          = model.id,
+                        fileName         = model.filename,
+                        downloadedBytes  = currentDownloaded,
+                        totalBytes       = totalBytes,
+                        percent          = percent
                     ))
                 }
             }
