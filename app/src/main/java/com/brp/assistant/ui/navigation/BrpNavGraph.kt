@@ -63,11 +63,14 @@ private data class NavItem(
     val iconContent: @Composable () -> Unit
 )
 
+// FIX: явный screen= параметр во всех NavItem-вызовах —
+// без явного именованного параметра короткая записью NavItem(Screen.Home){ ... }
+// амбивалентна при возможных изменениях data class (добавление второго val).
 private val navItems = listOf(
-    NavItem(Screen.Home)          { Icon(Icons.Default.Home,          contentDescription = Screen.Home.label) },
-    NavItem(Screen.Diagnose)      { Icon(Icons.Default.Build,         contentDescription = Screen.Diagnose.label) },
-    NavItem(Screen.AccessoryShop) { Icon(Icons.Default.ShoppingBag,   contentDescription = Screen.AccessoryShop.label) },
-    NavItem(Screen.VehicleSelect) { Icon(Icons.Default.DirectionsCar, contentDescription = Screen.VehicleSelect.label) }
+    NavItem(screen = Screen.Home)          { Icon(Icons.Default.Home,          contentDescription = Screen.Home.label) },
+    NavItem(screen = Screen.Diagnose)      { Icon(Icons.Default.Build,         contentDescription = Screen.Diagnose.label) },
+    NavItem(screen = Screen.AccessoryShop) { Icon(Icons.Default.ShoppingBag,   contentDescription = Screen.AccessoryShop.label) },
+    NavItem(screen = Screen.VehicleSelect) { Icon(Icons.Default.DirectionsCar, contentDescription = Screen.VehicleSelect.label) }
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,7 +118,7 @@ fun BrpNavGraph(
                 widthSizeClass      = effectiveSizeClass
             )
         }
-        // ── MEDIUM (планшеты/fold ≥600dp): NavigationRail ─────────────────────────────
+        // ── MEDIUM (планшеты/fold ≥600dp): NavigationRail ─────────────────────
         effectiveSizeClass == WindowWidthSizeClass.Medium && showNav -> {
             Row(
                 modifier = Modifier
@@ -126,6 +129,11 @@ fun BrpNavGraph(
                     navController = navController,
                     currentRoute  = currentRoute
                 )
+                // FIX: добавлен windowInsetsPadding(WindowInsets.ime) —
+                // без него на Galaxy Fold (inner screen) и других
+                // Medium-устройствах клавиатура перекрывала поле ввода чата.
+                // safeDrawing содержит ime в Android 11+, но для
+                // старых Android добавляем явно.
                 NavHostContent(
                     navController       = navController,
                     mainViewModel       = mainViewModel,
@@ -135,14 +143,21 @@ fun BrpNavGraph(
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
                     widthSizeClass      = effectiveSizeClass,
-                    modifier            = Modifier.weight(1f).fillMaxHeight()
+                    modifier            = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .windowInsetsPadding(WindowInsets.ime)
                 )
             }
         }
-        // ── COMPACT (телефон): BottomNavigationBar ──────────────────────────────────
+        // ── COMPACT (телефон): BottomNavigationBar ──────────────────────
         else -> {
+            // FIX: contentWindowInsets комбинирует safeDrawing + ime.
+            // Раньше только safeDrawing — инсеты от IME не проходили
+            // через Scaffold, что вызывало перекрытие поля ввода на
+            // бюджетных Android 9/10 с нестандартным отображением клавиатуры.
             Scaffold(
-                contentWindowInsets = WindowInsets.safeDrawing,
+                contentWindowInsets = WindowInsets.safeDrawing.union(WindowInsets.ime),
                 bottomBar = {
                     if (showNav) {
                         NavigationBar {
@@ -208,11 +223,6 @@ private fun ExpandedLayout(
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass
 ) {
-    // FIX #2: chatVm НЕ создаётся здесь через hiltViewModel().
-    // Вместо этого он создаётся в NavHostContent (composable chat/-маршрута)
-    // и передаётся сюда через SharedChatVmHolder — единый ViewModelStoreOwner.
-    // Это предотвращает рассинхронизацию состояния между панелью сессий
-    // в ExpandedLayout и основным чатом в NavHostContent.
     val isChatRoute = currentRoute?.startsWith("chat/") == true
     val chatState = SharedChatVmHolder.chatVm?.state?.collectAsStateWithLifecycle()
 
@@ -221,7 +231,7 @@ private fun ExpandedLayout(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
-        // ── Постоянный дравер 240dp ───────────────────────────────────────
+        // ── Постоянный дравер 240dp ──────────────────────────────────────
         PermanentDrawerSheet(
             modifier = Modifier
                 .width(240.dp)
@@ -318,7 +328,7 @@ private fun ExpandedLayout(
             }
         }
 
-        // ── Панель сессий 280dp — только в chat/-маршруте ───────────────
+        // ── Панель сессий 280dp — только в chat/-маршруте ─────────────────
         if (isChatRoute && chatState != null) {
             val vm = SharedChatVmHolder.chatVm
             Surface(
@@ -402,7 +412,7 @@ private fun ExpandedLayout(
             }
         }
 
-        // ── Основной контент ─────────────────────────────────────────────────
+        // ── Основной контент ──────────────────────────────────────────
         NavHostContent(
             navController       = navController,
             mainViewModel       = mainViewModel,
