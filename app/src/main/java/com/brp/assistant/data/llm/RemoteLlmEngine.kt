@@ -3,6 +3,7 @@ package com.brp.assistant.data.llm
 import android.util.Log
 import com.brp.assistant.data.repository.SettingsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -11,8 +12,47 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * FIX #4: экспоненциальный backoff для повторных попыток.
+ *
+ * @param maxAttempts максимальное число попыток (включая первый)
+ * @param initialDelayMs задержка перед второй попыткой, далее удваивается
+ * @param shouldRetry предикат, определяющий нужно ли ретраит (по умолчанию — все ошибки)
+ */
+private suspend fun <T> withRetry(
+    maxAttempts: Int = 3,
+    initialDelayMs: Long = 500L,
+    shouldRetry: (Throwable) -> Boolean = { true },
+    block: suspend () -> Result<T>
+): Result<T> {
+    var lastResult: Result<T> = Result.failure(Exception("Нет попыток"))
+    repeat(maxAttempts) { attempt ->
+        if (attempt > 0) {
+            val delayMs = initialDelayMs * (1L shl (attempt - 1))  // 500 → 1000 → 2000
+            Log.d("RemoteLlmEngine", "Retry $attempt after ${delayMs}ms")
+            delay(delayMs)
+        }
+        lastResult = block()
+        if (lastResult.isSuccess) return lastResult
+        val ex = lastResult.exceptionOrNull() ?: return lastResult
+        if (!shouldRetry(ex)) return lastResult  // не ретраить (401, 404 и т.д.)
+    }
+    return lastResult
+}
+
+/**
+ * Предикат для shouldRetry: ретраит только сетевые ошибки (IOException) и 429.
+ * 4xx (кроме 429) — ошибки клиента, retry бессмыслен.
+ */
+private fun isRetryableError(e: Throwable): Boolean {
+    if (e is IOException) return true
+    val msg = e.message ?: return false
+    return msg.contains("429") || msg.contains("лимит", ignoreCase = true)
+}
 
 @Singleton
 class RemoteLlmEngine @Inject constructor(
@@ -105,9 +145,15 @@ class RemoteLlmEngine @Inject constructor(
     ): Result<String> = withContext(Dispatchers.IO) {
         val sysPrompt = systemPrompt.orEmpty()
         if (provider == "Gemini") {
-            generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+            // FIX #4: withRetry для Gemini
+            withRetry(shouldRetry = ::isRetryableError) {
+                generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+            }
         } else {
-            generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+            // FIX #4: withRetry для Groq
+            withRetry(shouldRetry = ::isRetryableError) {
+                generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
+            }
         }
     }
 
@@ -130,13 +176,17 @@ class RemoteLlmEngine @Inject constructor(
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            generateGeminiRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
+            withRetry(shouldRetry = ::isRetryableError) {
+                generateGeminiRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
+            }
         } else {
             val apiKey = settingsRepository.groqApiKey.first()
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            generateGroqRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
+            withRetry(shouldRetry = ::isRetryableError) {
+                generateGroqRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
+            }
         }
     }
 
@@ -158,8 +208,6 @@ class RemoteLlmEngine @Inject constructor(
 
         for (apiVersion in attempts) {
             try {
-                // API-ключ передаётся только через заголовок x-goog-api-key,
-                // а не через URL (?key=), чтобы не попадать в логи сервера
                 val url = "https://generativelanguage.googleapis.com/$apiVersion/models/$modelName:generateContent"
 
                 val jsonBody = JSONObject().apply {
@@ -215,6 +263,10 @@ class RemoteLlmEngine @Inject constructor(
                         }
                     }
                 }
+            } catch (e: IOException) {
+                // IOException — сетевая ошибка, withRetry выше произведёт retry
+                Log.e("RemoteLlmEngine", "IOException in $apiVersion", e)
+                throw e  // перебрасываем для подхвата withRetry
             } catch (e: Exception) {
                 Log.e("RemoteLlmEngine", "Exception in $apiVersion", e)
                 lastError = e
@@ -268,7 +320,7 @@ class RemoteLlmEngine @Inject constructor(
                         404 -> "Модель $modelName не найдена (404)."
                         else -> "Groq API Error: ${response.code}. $errorBody"
                     }
-                    throw Exception(msg)
+                    throw Exception(msg)  // IOException/Exception — withRetry решит retryить ли
                 }
 
                 val responseBody = response.body?.string()
@@ -283,6 +335,9 @@ class RemoteLlmEngine @Inject constructor(
                 withContext(Dispatchers.Main) { onPartial(text) }
                 Result.success(text)
             }
+        } catch (e: IOException) {
+            Log.e("RemoteLlmEngine", "Groq IOException", e)
+            throw e  // перебрасываем — withRetry перехватит и повторит
         } catch (e: Exception) {
             Log.e("RemoteLlmEngine", "Groq HTTP error", e)
             Result.failure(e)

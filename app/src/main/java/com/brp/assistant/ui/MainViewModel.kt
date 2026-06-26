@@ -73,17 +73,31 @@ class MainViewModel @Inject constructor(
     fun selectVehicle(model: BrpModel) {
         viewModelScope.launch {
             settingsRepository.setSelectedVehicleId(model.id)
+            // StateFlow обновляются автоматически через collect-поток в init{}
         }
     }
 
+    /**
+     * FIX #2: добавлен settingsRepository.setSelectedVehicleId(id).
+     *
+     * Раньше эта перегрузка записывала id/name напрямую в StateFlow,
+     * обходя DataStore. После перезапуска приложения DataStore считывался
+     * с null, сбрасывая выбранную технику.
+     *
+     * Теперь: settingsRepository.setSelectedVehicleId(id) вызывается явно,
+     * а StateFlow обновляются автоматически через collect-поток в init{},
+     * как это работает в первой перегрузке (BrpModel).
+     * Прямая запись больше не нужна.
+     */
     fun selectVehicle(id: String, name: String) {
-        _selectedVehicleId.value = id
-        _selectedVehicleName.value = name
         viewModelScope.launch {
+            // FIX #2: добавлен вызов settingsRepository, чтобы выбортехники
+            // переживал перезапуск. StateFlow обновится автоматически через collect
+            settingsRepository.setSelectedVehicleId(id)
             try {
                 _selectedVehicle.value = modelRepository.getById(id)
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Error loading vehicle by id", e)
+                Log.e("MainViewModel", "Error loading vehicle by id=$id", e)
             }
         }
     }

@@ -43,6 +43,14 @@ class LlmInferenceEngine @Inject constructor(
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
+        /**
+         * FIX #1: Максимальное время ожидания ответа от MediaPipe.
+         * 120 секунд — достаточно для генерации 1024 токенов даже на Helio G85,
+         * но защищает от бесконечного зависания при нативном дедлоке в JNI.
+         * Если нужно настроить под конкретное железо — меняй здесь.
+         */
+        private const val GENERATION_TIMEOUT_MS = 120_000L
+
         /** Все поддерживаемые расширения — оба движка */
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
     }
@@ -150,10 +158,17 @@ class LlmInferenceEngine @Inject constructor(
      * Системный промпт передаётся в LiteRT-LM нативно;
      * MediaPipe получает его как часть уже построенного [prompt].
      *
-     * FIX: catch (e: Throwable) вместо catch (e: Exception) —
+     * FIX #catch-throwable: catch (e: Throwable) вместо catch (e: Exception) —
      * OutOfMemoryError во время генерации токенов на JNI-слое MediaPipe
      * является Error, а не Exception, и ранее не перехватывался,
      * что приводило к крэшу на устройствах с 3 ГБ RAM.
+     *
+     * FIX #1: обёрнут в withTimeout(GENERATION_TIMEOUT_MS).
+     * inference.generateResponse(prompt) — синхронный вызов без таймаута;
+     * на слабых устройствах (Helio G85, MediaTek 700) он мог блокировать
+     * Dispatchers.IO поток на неопределённое время без возможности отмены.
+     * При TimeoutCancellationException пользователь получает понятное сообщение
+     * вместо бесконечного спиннера.
      */
     suspend fun generateResponse(
         prompt: String,
@@ -169,9 +184,25 @@ class LlmInferenceEngine @Inject constructor(
                     ?: return Result.failure(Exception("MediaPipe не инициализирован"))
                 withContext(Dispatchers.IO) {
                     try {
-                        val response = inference.generateResponse(prompt)
+                        // FIX #1: withTimeout гарантирует, что синхронный JNI-вызов
+                        // не заблокирует поток дольше GENERATION_TIMEOUT_MS.
+                        // При отмене корутины (например, пользователь ушёл с экрана)
+                        // TimeoutCancellationException всплывёт наружу и прервёт генерацию.
+                        val response = withTimeout(GENERATION_TIMEOUT_MS) {
+                            inference.generateResponse(prompt)
+                        }
+                        // Проверяем isActive: если корутина была отменена пока JNI
+                        // завершал работу — не шлём устаревший ответ в UI
+                        if (!isActive) return@withContext Result.failure(
+                            CancellationException("Генерация отменена")
+                        )
                         withContext(Dispatchers.Main) { onPartial(response) }
                         Result.success(response)
+                    } catch (e: TimeoutCancellationException) {
+                        val msg = "⏱ Превышено время ожидания ответа (${GENERATION_TIMEOUT_MS / 1000}с). " +
+                            "Попробуйте более короткий вопрос или лёгкую модель."
+                        Log.w(TAG, "MediaPipe generation timed out after ${GENERATION_TIMEOUT_MS}ms")
+                        Result.failure(RuntimeException(msg, e))
                     } catch (e: Throwable) {
                         // Перехватываем Throwable (включая OutOfMemoryError и нативные крэши)
                         val userMsg = when (e) {

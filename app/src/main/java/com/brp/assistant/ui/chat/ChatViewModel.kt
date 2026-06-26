@@ -1,7 +1,5 @@
 package com.brp.assistant.ui.chat
 
-import android.app.ActivityManager
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.brp.assistant.data.db.ChatSessionDao
@@ -11,13 +9,13 @@ import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.llm.OfflineModelInfo
 import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.SettingsRepository
+import com.brp.assistant.domain.DeviceCapabilityProvider
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.domain.model.MessageRole
 import com.brp.assistant.domain.model.RetrievalMode
 import com.brp.assistant.domain.usecase.ChatUseCase
 import com.brp.assistant.domain.usecase.DiagnoseUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -28,19 +26,17 @@ import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
-/** Дополнительный wrapper для отображения статуса загрузки в UI-шторке. */
 data class OfflineModelUiItem(
     val model: OfflineModelInfo,
     val isDownloaded: Boolean
 )
 
-/** Краткое описание сессии для панели истории на планшете. */
 data class ChatSessionSummary(
     val id: String,
     val title: String,
-    val vehicleName: String?,    // «Can-Am Maverick X3» или null
-    val dateLabel: String,       // «Сегодня», «Вчера», «14 июня» …
-    val preview: String          // первые 60 символов первого вопроса
+    val vehicleName: String?,
+    val dateLabel: String,
+    val preview: String
 )
 
 data class ChatState(
@@ -69,7 +65,8 @@ class ChatViewModel @Inject constructor(
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: SettingsRepository,
     private val chatSessionDao: ChatSessionDao,
-    @ApplicationContext private val context: Context
+    /** FIX #5: вместо @ApplicationContext + прямых вызовов ActivityManager */
+    private val deviceCapability: DeviceCapabilityProvider
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatState())
@@ -221,21 +218,10 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // ── OOM pre-check: двойная проверка — heap JVM + системная RAM ──────
-            // FIX: снижен порог JVM-heap 256→150 МБ (256 вызывал ложные блокировки
-            // на бюджетных устройствах с 3 ГБ RAM)
-            val runtime    = Runtime.getRuntime()
-            val freeHeapMb = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / 1_048_576L
-
-            // FIX: добавлена проверка системной RAM через ActivityManager —
-            // надёжнее heap-check на устройствах где heap растягивается лениво
-            val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val memInfo    = ActivityManager.MemoryInfo()
-            actManager.getMemoryInfo(memInfo)
-            val availRamMb = memInfo.availMem / 1_048_576L
-
-            if (freeHeapMb < 150L || availRamMb < 150L || memInfo.lowMemory) {
-                val oomMsg = "⚠️ Недостаточно памяти для генерации (heap: ~${freeHeapMb} МБ, RAM: ~${availRamMb} МБ). " +
+            // FIX #5: OOM pre-check — через DeviceCapabilityProvider, без ActivityManager в VM
+            val mem = deviceCapability.checkMemory()
+            if (!mem.isSafeForGeneration) {
+                val oomMsg = "⚠️ Недостаточно памяти (heap: ~${mem.freeHeapMb} МБ, RAM: ~${mem.availRamMb} МБ). " +
                         "Закройте другие приложения и повторите попытку."
                 _state.update {
                     it.copy(
@@ -314,11 +300,9 @@ class ChatViewModel @Inject constructor(
         mode: String
     ): String {
         activeSessionId?.let { return it }
-
         val id    = UUID.randomUUID().toString()
         val now   = System.currentTimeMillis()
         val title = firstMessage.take(60).let { if (it.length == 60) "$it…" else it }
-
         chatSessionDao.insertSession(
             ChatSessionEntity(
                 id          = id,
@@ -335,22 +319,24 @@ class ChatViewModel @Inject constructor(
         return id
     }
 
+    /** FIX #3: дельта-сохранение — только последние 2 сообщения, не вся сессия */
     private suspend fun persistMessages(sessionId: String, vehicleName: String?) {
         val now      = System.currentTimeMillis()
         val messages = _state.value.messages
         val title    = messages.firstOrNull { it.role == MessageRole.USER }?.content
             ?.take(60) ?: return
-
-        val entities = messages.mapIndexed { index, msg ->
-            ChatMessageEntity(
-                id        = "${sessionId}_$index",
-                sessionId = sessionId,
-                role      = if (msg.role == MessageRole.USER) "user" else "assistant",
-                content   = msg.content,
-                timestamp = now + index
+        val lastTwo = messages.takeLast(2)
+        lastTwo.forEach { msg ->
+            chatSessionDao.insertMessage(
+                ChatMessageEntity(
+                    id        = UUID.randomUUID().toString(),
+                    sessionId = sessionId,
+                    role      = if (msg.role == MessageRole.USER) "user" else "assistant",
+                    content   = msg.content,
+                    timestamp = now
+                )
             )
         }
-        chatSessionDao.insertMessages(entities)
         chatSessionDao.updateSession(
             id          = sessionId,
             title       = title,
@@ -370,17 +356,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /**
-     * FIX: заменён устаревший java.util.Calendar на java.time API.
-     * Calendar — deprecated-стиль; java.time доступен с API 26, minSdk=30 — OK.
-     */
     private fun formatDateLabel(epochMillis: Long): String {
         val msgDate   = Instant.ofEpochMilli(epochMillis)
-            .atZone(ZoneId.systemDefault())
-            .toLocalDate()
+            .atZone(ZoneId.systemDefault()).toLocalDate()
         val today     = LocalDate.now()
         val yesterday = today.minusDays(1)
-
         return when (msgDate) {
             today     -> "Сегодня"
             yesterday -> "Вчера"
