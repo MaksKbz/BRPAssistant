@@ -13,15 +13,24 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * FIX #4: экспоненциальный backoff для повторных попыток.
+ * Кастомное IOException-наследник для HTTP 429 Too Many Requests.
  *
- * @param maxAttempts максимальное число попыток (включая первый)
- * @param initialDelayMs задержка перед второй попыткой, далее удваивается
- * @param shouldRetry предикат, определяющий нужно ли ретраит (по умолчанию — все ошибки)
+ * FIX #429-retry: раньше generateGroqRawHttp кидал throw Exception(msg) при 429,
+ * но isRetryableError() проверяет (e is IOException) — поэтому withRetry не
+ * выполнял повторные попытки для 429 несмотря на msg.contains("429").
+ * Теперь 429 кидает Http429Exception — extends IOException,
+ * isRetryableError() перехватывает его корректно.
+ */
+private class Http429Exception(message: String) : IOException(message)
+
+/**
+ * FIX #4: экспоненциальный backoff для повторных попыток.
+ * maxAttempts=3: первый + 2 retry с задержкой 500ms → 1000ms.
  */
 private suspend fun <T> withRetry(
     maxAttempts: Int = 3,
@@ -39,37 +48,36 @@ private suspend fun <T> withRetry(
         lastResult = block()
         if (lastResult.isSuccess) return lastResult
         val ex = lastResult.exceptionOrNull() ?: return lastResult
-        if (!shouldRetry(ex)) return lastResult  // не ретраить (401, 404 и т.д.)
+        if (!shouldRetry(ex)) return lastResult
     }
     return lastResult
 }
 
 /**
- * Предикат для shouldRetry: ретраит только сетевые ошибки (IOException) и 429.
- * 4xx (кроме 429) — ошибки клиента, retry бессмыслен.
+ * Предикат для shouldRetry: ретраит только сетевые ошибки (IOException),
+ * включая Http429Exception. 4xx (кроме 429) — ошибки клиента, retry бессмыслен.
  */
-private fun isRetryableError(e: Throwable): Boolean {
-    if (e is IOException) return true
-    val msg = e.message ?: return false
-    return msg.contains("429") || msg.contains("лимит", ignoreCase = true)
-}
+private fun isRetryableError(e: Throwable): Boolean = e is IOException
 
 @Singleton
 class RemoteLlmEngine @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    /**
-     * FIX #12: OkHttpClient инжектируется как синглтон из AppModule.
-     * FIX #13: apiClient создаётся один раз в init-блоке,
-     * а не пересоздаётся на каждый запрос.
-     */
     private val client: OkHttpClient
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    // FIX #13: создаётся один раз вместо нового экземпляра при каждом запросе
+    /**
+     * FIX #timeouts: явные таймауты как защитный слой.
+     * На 2G/EDGE (актуально для регионов Казахстана) без явных таймаутов
+     * OkHttp висел бесконечно если базовый AppModule-клиент не настроен.
+     * connectTimeout 15с / readTimeout 30с / writeTimeout 15с.
+     */
     private val apiClient: OkHttpClient = client.newBuilder()
         .followRedirects(true)
         .followSslRedirects(true)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     suspend fun validateKey(provider: String, apiKey: String, modelName: String): Result<Boolean> =
@@ -91,9 +99,7 @@ class RemoteLlmEngine @Inject constructor(
                 }
             } else {
                 val testModel = if (modelName.contains("llama") || modelName.contains("mixtral"))
-                    modelName
-                else
-                    "llama-3.3-70b-versatile"
+                    modelName else "llama-3.3-70b-versatile"
                 try {
                     val url = "https://api.groq.com/openai/v1/chat/completions"
                     val json = JSONObject().apply {
@@ -129,11 +135,6 @@ class RemoteLlmEngine @Inject constructor(
             }
         }
 
-    /**
-     * FIX #4: перегрузка с явными параметрами.
-     * UseCase читает DataStore один раз атомарно и передаёт здесь,
-     * исключая race condition при смене провайдера в процессе запроса.
-     */
     suspend fun generateResponse(
         prompt: String,
         provider: String,
@@ -145,22 +146,16 @@ class RemoteLlmEngine @Inject constructor(
     ): Result<String> = withContext(Dispatchers.IO) {
         val sysPrompt = systemPrompt.orEmpty()
         if (provider == "Gemini") {
-            // FIX #4: withRetry для Gemini
             withRetry(shouldRetry = ::isRetryableError) {
                 generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
         } else {
-            // FIX #4: withRetry для Groq
             withRetry(shouldRetry = ::isRetryableError) {
                 generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
         }
     }
 
-    /**
-     * Старый метод — оставлен для обратной совместимости.
-     * Читает настройки из DataStore и делегирует в основную перегрузку.
-     */
     suspend fun generateResponse(
         prompt: String,
         onPartial: (String) -> Unit
@@ -242,14 +237,34 @@ class RemoteLlmEngine @Inject constructor(
                     val responseBody = response.body?.string() ?: ""
 
                     if (response.isSuccessful) {
+                        // FIX #safety-filter: безопасный парсинг.
+                        // Gemini возвращает candidates с пустым/отсутствующим content
+                        // при срабатывании Safety Filter (finishReason == "SAFETY").
+                        // Цепочка getJSONObject() падала с JSONException.
                         val jsonResponse = JSONObject(responseBody)
-                        val text = jsonResponse
-                            .getJSONArray("candidates")
-                            .getJSONObject(0)
-                            .getJSONObject("content")
-                            .getJSONArray("parts")
-                            .getJSONObject(0)
-                            .getString("text")
+                        val candidatesArr = jsonResponse.optJSONArray("candidates")
+                        val candidate = candidatesArr?.optJSONObject(0)
+
+                        val finishReason = candidate?.optString("finishReason", "") ?: ""
+                        if (finishReason == "SAFETY") {
+                            return Result.failure(
+                                Exception("Запрос заблокирован фильтром безопасности Gemini. Попробуйте переформулировать вопрос.")
+                            )
+                        }
+
+                        val text = candidate
+                            ?.optJSONObject("content")
+                            ?.optJSONArray("parts")
+                            ?.optJSONObject(0)
+                            ?.optString("text", "")
+                            .orEmpty()
+
+                        if (text.isBlank()) {
+                            return Result.failure(
+                                Exception("Пустой ответ от Gemini" +
+                                    if (finishReason.isNotBlank()) " (finishReason: $finishReason)" else "")
+                            )
+                        }
 
                         withContext(Dispatchers.Main) { onPartial(text) }
                         return Result.success(text)
@@ -257,16 +272,15 @@ class RemoteLlmEngine @Inject constructor(
                         Log.e("RemoteLlmEngine", "Gemini $apiVersion failed: ${response.code} $responseBody")
                         when (response.code) {
                             404  -> lastError = Exception("Модель $modelName не найдена ($apiVersion)")
-                            429  -> return Result.failure(Exception("Превышена квота запросов (429). Подождите 1 минуту."))
+                            429  -> return Result.failure(Http429Exception("Превышена квота запросов (429). Подождите 1 минуту."))
                             401  -> return Result.failure(Exception("Неверный Gemini API-ключ (401). Проверьте ключ в Настройках."))
                             else -> lastError = Exception("Ошибка $apiVersion (${response.code}): $responseBody")
                         }
                     }
                 }
             } catch (e: IOException) {
-                // IOException — сетевая ошибка, withRetry выше произведёт retry
                 Log.e("RemoteLlmEngine", "IOException in $apiVersion", e)
-                throw e  // перебрасываем для подхвата withRetry
+                throw e
             } catch (e: Exception) {
                 Log.e("RemoteLlmEngine", "Exception in $apiVersion", e)
                 lastError = e
@@ -314,13 +328,15 @@ class RemoteLlmEngine @Inject constructor(
             apiClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string() ?: ""
-                    val msg = when (response.code) {
-                        401 -> "Неверный Groq API-ключ (401)."
-                        429 -> "Превышен лимит Groq (429). Подождите."
-                        404 -> "Модель $modelName не найдена (404)."
-                        else -> "Groq API Error: ${response.code}. $errorBody"
+                    // FIX #429-retry: Http429Exception extends IOException —
+                    // isRetryableError() перехватывает через (e is IOException).
+                    // 4xx (кроме 429) кидаются как Exception — retry не выполняется.
+                    when (response.code) {
+                        401  -> throw Exception("Неверный Groq API-ключ (401).")
+                        429  -> throw Http429Exception("Превышен лимит Groq (429). Подождите.")
+                        404  -> throw Exception("Модель $modelName не найдена (404).")
+                        else -> throw Exception("Groq API Error: ${response.code}. $errorBody")
                     }
-                    throw Exception(msg)  // IOException/Exception — withRetry решит retryить ли
                 }
 
                 val responseBody = response.body?.string()
