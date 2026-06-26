@@ -93,7 +93,7 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
-    // ── LLM Engines ─────────────────────────────────────────────────────────
+    // ── LLM Engines ─────────────────────────────────────────────────────────────────────
 
     // Движок 1: MediaPipe LlmInference — поддерживает .task файлы
     implementation(libs.mediapipe.genai)
@@ -105,11 +105,14 @@ dependencies {
     // Устаревший движок (llmedge) — оставлен для совместимости
     implementation("io.github.aatricks:llmedge:0.4.0beta")
 
-    // ── Coroutines ───────────────────────────────────────────────────────────
+    // ── Coroutines ──────────────────────────────────────────────────────────────────────
     implementation(libs.kotlinx.coroutines.android)
 
-    // DataStore
+    // DataStore (неконфиденциальные настройки: theme, provider, temperature и т.д.)
     implementation(libs.androidx.datastore.preferences)
+
+    // Security Crypto (шифрование API-ключей через EncryptedSharedPreferences)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Serialization
     implementation(libs.kotlinx.serialization.json)
