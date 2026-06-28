@@ -59,10 +59,24 @@ private suspend fun <T> withRetry(
  */
 private fun isRetryableError(e: Throwable): Boolean = e is IOException
 
+/**
+ * Возвращает true если ошибка — временный сбой сети/сервера,
+ * а не ошибка конфигурации (неверный ключ, модель не найдена).
+ * Только временные ошибки инкрементируют CircuitBreaker.
+ */
+private fun isTransientError(e: Throwable): Boolean =
+    e is IOException || (e.message?.contains("429") == true)
+
 @Singleton
 class RemoteLlmEngine @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val client: OkHttpClient
+    private val client: OkHttpClient,
+    /**
+     * #3 — Circuit Breaker подключён через конструктор.
+     * После FAILURE_THRESHOLD=3 подряд временных ошибок блокирует
+     * провайдера на RESET_TIMEOUT_MS=30с без сетевых запросов.
+     */
+    private val circuitBreaker: CircuitBreaker
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -80,6 +94,10 @@ class RemoteLlmEngine @Inject constructor(
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * Сбрасывает circuit breaker при успешной валидации ключа.
+     * Это важно: пользователь мог ввести новый ключ после серии ошибок.
+     */
     suspend fun validateKey(provider: String, apiKey: String, modelName: String): Result<Boolean> =
         withContext(Dispatchers.IO) {
             if (provider == "Gemini") {
@@ -91,8 +109,12 @@ class RemoteLlmEngine @Inject constructor(
                         .get()
                         .build()
                     apiClient.newCall(request).execute().use { response ->
-                        if (response.isSuccessful) Result.success(true)
-                        else Result.failure(Exception("Ошибка Gemini: ${response.code}"))
+                        if (response.isSuccessful) {
+                            circuitBreaker.reset("Gemini")
+                            Result.success(true)
+                        } else {
+                            Result.failure(Exception("Ошибка Gemini: ${response.code}"))
+                        }
                     }
                 } catch (e: Exception) {
                     Result.failure(e)
@@ -119,6 +141,7 @@ class RemoteLlmEngine @Inject constructor(
                         .build()
                     apiClient.newCall(request).execute().use { response ->
                         if (response.isSuccessful) {
+                            circuitBreaker.reset("Groq")
                             Result.success(true)
                         } else {
                             val errorDetail = when (response.code) {
@@ -135,6 +158,14 @@ class RemoteLlmEngine @Inject constructor(
             }
         }
 
+    /**
+     * Основной метод генерации ответа с явными параметрами провайдера.
+     *
+     * #3: Перед выполнением проверяет CircuitBreaker.isOpen(provider).
+     * Если OPEN — немедленно возвращает Result.failure без сетевого запроса.
+     * После выполнения вызывает recordSuccess() или recordFailure() в зависимости
+     * от результата. Ошибки конфигурации (401, 404) не инкрементируют счётчик.
+     */
     suspend fun generateResponse(
         prompt: String,
         provider: String,
@@ -144,8 +175,15 @@ class RemoteLlmEngine @Inject constructor(
         temperature: Float,
         onPartial: (String) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
+        // #3 — Circuit Breaker guard
+        if (circuitBreaker.isOpen(provider)) {
+            return@withContext Result.failure(
+                Exception("Провайдер $provider временно недоступен. Повторите через 30 секунд.")
+            )
+        }
+
         val sysPrompt = systemPrompt.orEmpty()
-        if (provider == "Gemini") {
+        val result = if (provider == "Gemini") {
             withRetry(shouldRetry = ::isRetryableError) {
                 generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
@@ -154,6 +192,17 @@ class RemoteLlmEngine @Inject constructor(
                 generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
         }
+
+        // #3 — обновляем состояние breaker
+        if (result.isSuccess) {
+            circuitBreaker.recordSuccess(provider)
+        } else {
+            val ex = result.exceptionOrNull()
+            if (ex != null && isTransientError(ex)) {
+                circuitBreaker.recordFailure(provider)
+            }
+        }
+        result
     }
 
     suspend fun generateResponse(
@@ -171,17 +220,34 @@ class RemoteLlmEngine @Inject constructor(
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            withRetry(shouldRetry = ::isRetryableError) {
+            // #3 — guard для shorthand-перегрузки
+            if (circuitBreaker.isOpen(provider)) {
+                return@withContext Result.failure(
+                    Exception("Провайдер Gemini временно недоступен. Повторите через 30 секунд.")
+                )
+            }
+            val result = withRetry(shouldRetry = ::isRetryableError) {
                 generateGeminiRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
             }
+            if (result.isSuccess) circuitBreaker.recordSuccess(provider)
+            else result.exceptionOrNull()?.let { if (isTransientError(it)) circuitBreaker.recordFailure(provider) }
+            result
         } else {
             val apiKey = settingsRepository.groqApiKey.first()
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            withRetry(shouldRetry = ::isRetryableError) {
+            if (circuitBreaker.isOpen(provider)) {
+                return@withContext Result.failure(
+                    Exception("Провайдер Groq временно недоступен. Повторите через 30 секунд.")
+                )
+            }
+            val result = withRetry(shouldRetry = ::isRetryableError) {
                 generateGroqRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
             }
+            if (result.isSuccess) circuitBreaker.recordSuccess(provider)
+            else result.exceptionOrNull()?.let { if (isTransientError(it)) circuitBreaker.recordFailure(provider) }
+            result
         }
     }
 

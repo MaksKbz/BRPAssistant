@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.domain.model.MessageRole
 import com.brp.assistant.ui.components.ChatInputBar
+import com.brp.assistant.ui.components.OfflineModeBanner
 import com.brp.assistant.ui.components.SafetyBanner
 import com.brp.assistant.ui.navigation.Screen
 
@@ -181,6 +182,12 @@ fun ChatScreen(
     currentOnlineProvider: String,
     selectedLlmModelId: String?,
     selectedOnlineProvider: String?,
+    /**
+     * #2 — true когда выбран онлайн-провайдер но API-ключ не задан.
+     * ChatViewModel вычисляет это из settingsRepository + selectedOnlineProvider.
+     * При true показывается OfflineModeBanner под TopAppBar.
+     */
+    hasOnlineKeyMissing: Boolean = false,
     onSelectOfflineLlm: (String?) -> Unit,
     onSelectOnlineLlm: (String) -> Unit,
     onResetLlm: () -> Unit,
@@ -270,6 +277,15 @@ fun ChatScreen(
                             Icon(Icons.Default.Home, "Главная")
                         }
                     }
+                )
+            }
+
+            // #2 — OfflineModeBanner: показываем если провайдер выбран но ключ не задан
+            if (hasOnlineKeyMissing && selectedOnlineProvider != null) {
+                OfflineModeBanner(
+                    providerName = selectedOnlineProvider,
+                    onGoToSettings = { onNavigate(Screen.Settings.route) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                 )
             }
 
