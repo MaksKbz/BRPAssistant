@@ -1,6 +1,7 @@
 package com.brp.assistant.ui.chat
 
 import android.content.res.Configuration
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
@@ -29,18 +31,64 @@ import com.brp.assistant.ui.components.OfflineModeBanner
 import com.brp.assistant.ui.components.SafetyBanner
 import com.brp.assistant.ui.navigation.Screen
 
-// FIX: убран дублирующийся data class ChatSessionSummary — каноничное определение
-// находится в ChatViewModel.kt. Импортировать не нужно — оба файла в одном пакете.
+// ─────────────────────────────────────────────────────────────────────────────
+// #16 — HealthWarningBanner
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun HealthWarningBanner(
+    message: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Закрыть",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Левая панель истории (только планшет / фолдабл)
+// #16 — Левая панель истории (планшет / фолдабл) с поиском и swipe-delete
 // ─────────────────────────────────────────────────────────────────────────────
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatHistoryPanel(
     sessions: List<ChatSessionSummary>,
     selectedId: String?,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     onSelectSession: (String) -> Unit,
+    onDeleteSession: (String) -> Unit,
     onNewChat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -49,6 +97,7 @@ private fun ChatHistoryPanel(
             .fillMaxHeight()
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
+        // Заголовок + кнопка нового чата
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -71,7 +120,46 @@ private fun ChatHistoryPanel(
             }
         }
 
-        HorizontalDivider()
+        // #16 — Поле поиска
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            placeholder = {
+                Text(
+                    "Поиск…",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(
+                        onClick = { onSearchQueryChange("") },
+                        modifier = Modifier.size(20.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Clear,
+                            contentDescription = "Очистить",
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall,
+            shape = RoundedCornerShape(8.dp)
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
 
         if (sessions.isEmpty()) {
             Column(
@@ -89,15 +177,13 @@ private fun ChatHistoryPanel(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Нет сохранённых\nдиалогов",
+                    if (searchQuery.isNotEmpty()) "Ничего не найдено"
+                    else "Нет сохранённых\nдиалогов",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             }
         } else {
-            // FIX #4: remember по содержимому (id + dateLabel), а не по ссылке на список.
-            // Без этого при изменении dateLabel (переход через полночь) grouped не
-            // пересчитывается, и сессии остаются в неправильных группах.
             val grouped = remember(sessions.map { it.id + it.dateLabel }) {
                 sessions.groupBy { it.dateLabel }
             }
@@ -117,40 +203,84 @@ private fun ChatHistoryPanel(
                     }
                     items(items, key = { it.id }) { session ->
                         val isSelected = session.id == selectedId
-                        // FIX #5: минимальный touch target 48dp (Material Design 3).
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .clickable { onSelectSession(session.id) },
-                            color = if (isSelected)
-                                MaterialTheme.colorScheme.primaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
+
+                        // #16 — Swipe-to-delete
+                        val dismissState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { value ->
+                                if (value == SwipeToDismissBoxValue.EndToStart) {
+                                    onDeleteSession(session.id)
+                                    true
+                                } else false
+                            }
+                        )
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            backgroundContent = {
+                                val bgColor by animateColorAsState(
+                                    targetValue = if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart)
+                                        MaterialTheme.colorScheme.errorContainer
+                                    else Color.Transparent,
+                                    label = "swipe_bg"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(bgColor)
+                                        .padding(end = 16.dp),
+                                    contentAlignment = Alignment.CenterEnd
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Удалить",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
                         ) {
-                            Column(
+                            Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalArrangement = Arrangement.Center
+                                    .heightIn(min = 48.dp)
+                                    .clickable { onSelectSession(session.id) },
+                                color = if (isSelected)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
                             ) {
-                                Text(
-                                    session.title,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    color = if (isSelected)
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    else
-                                        MaterialTheme.colorScheme.onSurface
-                                )
-                                if (session.preview.isNotBlank()) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.Center
+                                ) {
                                     Text(
-                                        session.preview,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                        maxLines = 2
+                                        session.title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        color = if (isSelected)
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        else
+                                            MaterialTheme.colorScheme.onSurface
                                     )
+                                    if (session.vehicleName != null) {
+                                        Text(
+                                            session.vehicleName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            maxLines = 1
+                                        )
+                                    }
+                                    if (session.preview.isNotBlank()) {
+                                        Text(
+                                            session.preview,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -180,12 +310,13 @@ fun ChatScreen(
     currentOnlineProvider: String,
     selectedLlmModelId: String?,
     selectedOnlineProvider: String?,
-    /**
-     * #2 — true когда выбран онлайн-провайдер но API-ключ не задан.
-     * ChatViewModel вычисляет это из settingsRepository + selectedOnlineProvider.
-     * При true показывается OfflineModeBanner под TopAppBar.
-     */
+    /** #2 — true когда выбран онлайн-провайдер но API-ключ не задан */
     hasOnlineKeyMissing: Boolean = false,
+    /** #12 — предупреждение от AppHealthChecker; null = всё хорошо */
+    healthWarning: String? = null,
+    /** #13 — текущий запрос поиска по истории */
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
     onSelectOfflineLlm: (String?) -> Unit,
     onSelectOnlineLlm: (String) -> Unit,
     onResetLlm: () -> Unit,
@@ -193,14 +324,19 @@ fun ChatScreen(
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
+    /** #13 — уже отфильтрованный список (filteredSessions из ViewModel) */
     sessionHistory: List<ChatSessionSummary> = emptyList(),
     selectedSessionId: String? = null,
     onSelectSession: (String) -> Unit = {},
-    onNewChat: () -> Unit = {}
+    onNewChat: () -> Unit = {},
+    /** #14 — удаление сессии свайпом */
+    onDeleteSession: (String) -> Unit = {}
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     var showLlmSheet by remember { mutableStateOf(false) }
+    // #12 — локальный dismiss для healthWarning (не сбрасывает ViewModel)
+    var healthDismissed by remember(healthWarning) { mutableStateOf(false) }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -217,13 +353,7 @@ fun ChatScreen(
         else -> currentOnlineProvider
     }
 
-    // FIX #1: isTablet = true только для Medium (планшеты с Rail).
-    // При Expanded — панель сессий уже есть в ExpandedLayout (BrpNavGraph),
-    // туда передаётся WindowWidthSizeClass.Medium, поэтому дублирования нет.
     val isTablet = widthSizeClass == WindowWidthSizeClass.Medium
-
-    // FIX #7: в landscape на Compact-телефоне TopAppBar скрывается при открытой
-    // клавиатуре, чтобы освободить место для чата.
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val imeVisible = WindowInsets.isImeVisible
@@ -276,9 +406,16 @@ fun ChatScreen(
                 )
             }
 
-            // #2 — OfflineModeBanner: показываем если провайдер выбран но ключ не задан
-            // FIX: Screen.Settings не существует в sealed class Screen.
-            // Правильный маршрут настроек API-ключа — Screen.ModelManager.
+            // #12 — HealthWarningBanner
+            if (healthWarning != null && !healthDismissed) {
+                HealthWarningBanner(
+                    message = healthWarning,
+                    onDismiss = { healthDismissed = true },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+
+            // #2 — OfflineModeBanner
             if (hasOnlineKeyMissing && selectedOnlineProvider != null) {
                 OfflineModeBanner(
                     providerName = selectedOnlineProvider,
@@ -331,8 +468,6 @@ fun ChatScreen(
                 }
             }
 
-            // FIX: добавлен imePadding() — без него в landscape-режиме клавиатура
-            // перекрывает поле ввода на ~30% высоты экрана.
             Box(modifier = Modifier.imePadding()) {
                 ChatInputBar(
                     value = input,
@@ -355,7 +490,10 @@ fun ChatScreen(
             ChatHistoryPanel(
                 sessions = sessionHistory,
                 selectedId = selectedSessionId,
+                searchQuery = searchQuery,
+                onSearchQueryChange = onSearchQueryChange,
                 onSelectSession = onSelectSession,
+                onDeleteSession = onDeleteSession,
                 onNewChat = onNewChat,
                 modifier = Modifier
                     .fillMaxHeight()
@@ -535,7 +673,7 @@ private fun LlmOptionRow(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MessageBubble — copy-to-clipboard по долгому нажатию
+// MessageBubble
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
