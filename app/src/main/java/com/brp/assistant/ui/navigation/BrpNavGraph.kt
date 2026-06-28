@@ -26,6 +26,7 @@ import com.brp.assistant.ui.accessory.AccessoryShopScreen
 import com.brp.assistant.ui.chat.ChatScreen
 import com.brp.assistant.ui.chat.ChatViewModel
 import com.brp.assistant.ui.compare.CompareScreen
+import com.brp.assistant.ui.compare.CompareViewModel
 import com.brp.assistant.ui.diagnose.DiagnoseScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
@@ -72,9 +73,7 @@ private val navItems = listOf(
 )
 
 /**
- * A1 — Заменяем голый var на WeakReference, чтобы избежать утечки памяти.
- * ExpandedLayout обращается через .get(), который возвращает null если VM уже
- * собрана GC после onDispose.
+ * A1 — WeakReference чтобы избежать утечки памяти ChatViewModel в ExpandedLayout.
  */
 object SharedChatVmHolder {
     private var ref: WeakReference<ChatViewModel>? = null
@@ -95,14 +94,16 @@ fun BrpNavGraph(
     val currentRoute      = navBackStackEntry?.destination?.route
 
     val showNav = currentRoute in bottomScreens.map { it.route } ||
-            currentRoute?.startsWith("chat/") == true
+            currentRoute?.startsWith("chat/") == true ||
+            currentRoute == Screen.Situations.route ||
+            currentRoute == Screen.Maintenance.route ||
+            currentRoute == Screen.Compare.route
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
     val selectedVehicleName by mainViewModel.selectedVehicleName.collectAsStateWithLifecycle()
     val selectedVehicle     by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
-    // B2 — healthWarning из MainViewModel
     val healthWarning       by mainViewModel.healthWarning.collectAsStateWithLifecycle()
 
     val configuration = LocalConfiguration.current
@@ -145,6 +146,7 @@ fun BrpNavGraph(
                     selectedVehicle     = selectedVehicle,
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
+                    healthWarning       = healthWarning,
                     widthSizeClass      = effectiveSizeClass,
                     modifier            = Modifier
                         .weight(1f)
@@ -186,6 +188,7 @@ fun BrpNavGraph(
                     selectedVehicle     = selectedVehicle,
                     activeModelName     = activeModelName,
                     currentTheme        = currentTheme,
+                    healthWarning       = healthWarning,
                     widthSizeClass      = effectiveSizeClass,
                     modifier            = Modifier.padding(innerPadding)
                 )
@@ -208,11 +211,10 @@ private fun ExpandedLayout(
     widthSizeClass: WindowWidthSizeClass
 ) {
     val isChatRoute = currentRoute?.startsWith("chat/") == true
-    // A1 — используем WeakReference-holder; chatVm может быть null если VM собрана
     val vm = SharedChatVmHolder.chatVm
     val chatState = vm?.state?.collectAsStateWithLifecycle()
+    val healthWarning by mainViewModel.healthWarning.collectAsStateWithLifecycle()
 
-    // B1 — поисковый запрос в боковой панели истории (expanded layout)
     var panelSearch by remember { mutableStateOf("") }
 
     Row(
@@ -313,7 +315,6 @@ private fun ExpandedLayout(
             }
         }
 
-        // B1 — боковая панель истории чата с полем поиска
         if (isChatRoute && chatState != null) {
             Surface(
                 modifier       = Modifier
@@ -337,7 +338,6 @@ private fun ExpandedLayout(
 
                     Spacer(Modifier.height(8.dp))
 
-                    // B1 — поле поиска в expanded боковой панели
                     OutlinedTextField(
                         value         = panelSearch,
                         onValueChange = { panelSearch = it },
@@ -364,7 +364,6 @@ private fun ExpandedLayout(
 
                     Spacer(Modifier.height(4.dp))
 
-                    // B1 — клиентская фильтрация по panelSearch
                     val sessions = chatState.value.sessionHistory
                     val filteredPanel = remember(sessions, panelSearch) {
                         val q = panelSearch.trim().lowercase()
@@ -432,6 +431,7 @@ private fun ExpandedLayout(
             selectedVehicle     = selectedVehicle,
             activeModelName     = activeModelName,
             currentTheme        = currentTheme,
+            healthWarning       = healthWarning,
             widthSizeClass      = WindowWidthSizeClass.Medium,
             modifier            = Modifier.weight(1f).fillMaxHeight()
         )
@@ -486,6 +486,7 @@ private fun NavHostContent(
     selectedVehicle: Any?,
     activeModelName: String?,
     currentTheme: String,
+    healthWarning: String?,
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
     modifier: Modifier = Modifier
 ) {
@@ -496,12 +497,16 @@ private fun NavHostContent(
     ) {
         composable(Screen.Home.route) {
             HomeScreen(
-                selectedVehicleName = selectedVehicleName,
-                activeModelName     = activeModelName,
-                currentTheme        = currentTheme,
-                widthSizeClass      = widthSizeClass,
-                onSetTheme          = { mainViewModel.setAppTheme(it) },
-                onNavigate          = { route -> navController.navigate(route) }
+                healthWarning           = healthWarning,
+                onNavigateToChat        = { mode -> navController.navigate(Screen.Chat.createRoute(mode)) },
+                onNavigateToDiagnose    = { navController.navigate(Screen.Diagnose.route) },
+                onNavigateToCompare     = { navController.navigate(Screen.Compare.route) },
+                onNavigateToMaintenance = { navController.navigate(Screen.Maintenance.route) },
+                onNavigateToAccessory   = { navController.navigate(Screen.AccessoryShop.route) },
+                onNavigateToSituations  = { navController.navigate(Screen.Situations.route) },
+                onNavigateToVehicle     = { navController.navigate(Screen.VehicleSelect.route) },
+                onNavigateToModel       = { navController.navigate(Screen.ModelManager.route) },
+                onNavigateToSettings    = { navController.navigate(Screen.ModelManager.route) }
             )
         }
         composable(Screen.Situations.route) {
@@ -527,6 +532,25 @@ private fun NavHostContent(
                 purchaseDate         = state.purchaseDate,
                 onUpdatePurchaseDate = { maintVm.updatePurchaseDate(it) },
                 onBack               = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.Compare.route) {
+            val compareVm: CompareViewModel = hiltViewModel()
+            val state by compareVm.state.collectAsStateWithLifecycle()
+            CompareScreen(
+                allModels           = state.allModels,
+                selectedModels      = state.selectedModels,
+                showLimitToast      = state.showLimitToast,
+                onToggleModel       = { compareVm.toggleModel(it) },
+                onClearSelection    = { compareVm.clearSelection() },
+                onCompareWithAI     = {
+                    val names = state.selectedModels.joinToString(", ") { it.modelName }
+                    navController.navigate(
+                        Screen.Chat.createRoute("both", "Сравни технику BRP: $names")
+                    )
+                },
+                onDismissLimitToast = { compareVm.dismissLimitToast() },
+                onBack              = { navController.popBackStack() }
             )
         }
         composable(Screen.VehicleSelect.route) {
@@ -567,7 +591,6 @@ private fun NavHostContent(
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
 
-            // A1 — регистрируем через WeakReference-holder
             DisposableEffect(chatVm) {
                 SharedChatVmHolder.chatVm = chatVm
                 onDispose { SharedChatVmHolder.chatVm = null }
@@ -596,6 +619,9 @@ private fun NavHostContent(
                 selectedLlmModelId     = state.selectedLlmModelId,
                 selectedOnlineProvider = state.selectedOnlineProvider,
                 hasOnlineKeyMissing    = state.hasOnlineKeyMissing,
+                healthWarning          = healthWarning,
+                searchQuery            = state.searchQuery,
+                onSearchQueryChange    = { chatVm.updateSearchQuery(it) },
                 onSelectOfflineLlm     = { chatVm.selectOfflineLlm(it) },
                 onSelectOnlineLlm      = { chatVm.selectOnlineLlm(it) },
                 onResetLlm             = { chatVm.resetLlmSelection() },
@@ -606,12 +632,10 @@ private fun NavHostContent(
                 sessionHistory         = state.sessionHistory,
                 selectedSessionId      = state.selectedSessionId,
                 onSelectSession        = { id -> chatVm.loadSession(id) },
-                onNewChat              = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, mode) }
+                onNewChat              = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, mode) },
+                onDeleteSession        = { id -> chatVm.deleteSession(id) }
             )
         }
-        // A2 — DiagnoseScreen и AccessoryShopScreen больше не создают
-        // stub-ChatViewModel: они сразу навигируют в chat/{mode}.
-        // Лишние hiltViewModel()-вызовы убраны.
         composable(Screen.Diagnose.route) {
             DiagnoseScreen(
                 selectedVehicle    = selectedVehicle,
@@ -664,28 +688,13 @@ private fun NavHostContent(
                 onAddFromFile        = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
                 onAddFromUrl         = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
                 onUpdateApiKey       = { modelVm.updateApiKey(it) },
-                onUpdateProvider     = { modelVm.updateAiProvider(it) },
-                onUpdateModel        = { modelVm.updateAiModel(it) },
+                onUpdateProvider     = { modelVm.updateProvider(it) },
+                onUpdateModel        = { modelVm.updateModel(it) },
                 onUpdateSystemPrompt = { modelVm.updateSystemPrompt(it) },
                 onUpdateTemperature  = { modelVm.updateTemperature(it) },
                 onClearError         = { modelVm.clearError() },
                 onNavigate           = { route -> navController.navigate(route) },
                 onBack               = { navController.popBackStack() }
-            )
-        }
-        composable(Screen.Compare.route) {
-            val compareVm: com.brp.assistant.ui.compare.CompareViewModel = hiltViewModel()
-            val state by compareVm.state.collectAsStateWithLifecycle()
-            CompareScreen(
-                allModels        = state.allModels,
-                selectedModels   = state.selectedModels,
-                onToggleModel    = { compareVm.toggleModel(it) },
-                onClearSelection = { compareVm.clearSelection() },
-                onCompareWithAI  = {
-                    val names = state.selectedModels.joinToString(" и ") { it.modelName }
-                    navController.navigate(Screen.Chat.createRoute("both", "Сравни эти модели: $names"))
-                },
-                onBack           = { navController.popBackStack() }
             )
         }
     }
