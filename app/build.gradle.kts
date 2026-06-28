@@ -111,7 +111,8 @@ dependencies {
 
     // Движок 2: LiteRT-LM — поддерживает .litertlm файлы (Qwen3, Gemma4 и др.)
     // Документация: https://developers.google.com/edge/litert-lm/android
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.1.1")
+    // Версии: https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-android
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.13.1")
 
     // llmedge удалён — устаревший beta-движок с нестабильным API
 

@@ -3,6 +3,7 @@ package com.brp.assistant.data.llm
 import android.content.Context
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
@@ -29,6 +30,15 @@ import javax.inject.Singleton
  *
  * Документация: https://developers.google.com/edge/litert-lm/android
  * Репозиторий:  https://github.com/google-ai-edge/LiteRT-LM
+ *
+ * API (litertlm-android 0.13.x):
+ *   - Engine создаётся конструктором Engine(engineConfig) и ТРЕБУЕТ вызова
+ *     engine.initialize() перед использованием (тяжёлая операция — на IO-потоке).
+ *   - Диалог: engine.createConversation(ConversationConfig) → sendMessageAsync(text),
+ *     возвращает Flow<Message>; текст чанка — message.toString().
+ *   - systemInstruction имеет тип Contents? → оборачиваем через Contents.of(text).
+ *   - Engine.close() бросает IllegalStateException, если движок не инициализирован —
+ *     поэтому закрываем только после успешного initialize() (проверка isInitialized()).
  */
 @Singleton
 class LiteRtLmEngine @Inject constructor(
@@ -42,17 +52,17 @@ class LiteRtLmEngine @Inject constructor(
     private var activeModelInfo: OfflineModelInfo? = null
 
     /**
-     * FIX #3: флаг закрытия движка.
+     * Флаг закрытия движка.
      *
      * Проблема: при вызове closeInternal() во время активной стриминговой
      * генерации нативный Engine освобождается, но Flow ещё держит ссылку
-     * на объект Conversation — следующий вызов conversation.generateResponse()
+     * на объект Conversation — следующий вызов sendMessageAsync()
      * падает с нативным крашем (SIGSEGV или JNI exception).
      *
      * Решение: @Volatile флаг isClosed проверяется в начале
-     * generateResponseStreaming(). При закрытии Flow немедленно получает
-     * IllegalStateException вместо нативного краша. После re-инициализации
-     * флаг сбрасывается в false.
+     * generateResponseStreaming() и на каждом токене. При закрытии Flow
+     * немедленно получает IllegalStateException вместо нативного краша.
+     * После re-инициализации флаг сбрасывается в false.
      */
     @Volatile
     private var isClosed = false
@@ -83,13 +93,13 @@ class LiteRtLmEngine @Inject constructor(
                     )
                 }
 
-                val engineConfig = tryBuildConfig(modelFile, useGpu = true)
-                    ?: tryBuildConfig(modelFile, useGpu = false)
+                val eng = createAndInitEngine(modelFile, useGpu = true)
+                    ?: createAndInitEngine(modelFile, useGpu = false)
                     ?: return@withContext Result.failure(
-                        Exception("Не удалось создать конфигурацию LiteRT-LM движка")
+                        Exception("Не удалось инициализировать LiteRT-LM движок для ${model.title}")
                     )
 
-                engine = Engine.create(engineConfig)
+                engine = eng
                 activeModelInfo = model
                 isClosed = false   // сбрасываем флаг после успешной инициализации
                 Log.i(TAG, "LiteRT-LM initialized: ${model.title}")
@@ -103,37 +113,59 @@ class LiteRtLmEngine @Inject constructor(
         }
 
     /**
+     * Создаёт и инициализирует [Engine] для заданного бэкенда.
+     *
+     * Engine(engineConfig) не выделяет нативных ресурсов до вызова initialize(),
+     * поэтому неуспешная попытка здесь не приводит к утечке нативного handle.
+     *
+     * @return готовый к работе Engine или null, если конфигурация/инициализация не удалась.
+     */
+    private fun createAndInitEngine(modelFile: File, useGpu: Boolean): Engine? {
+        return try {
+            val backend: Backend = if (useGpu) Backend.GPU() else Backend.CPU()
+            val config = EngineConfig(
+                modelPath = modelFile.absolutePath,
+                backend = backend
+            )
+            Engine(config).also { it.initialize() }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Engine create/init failed (gpu=$useGpu): ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Генерирует ответ на промпт в виде потока частичных токенов.
      *
-     * FIX #3: проверяем isClosed перед использованием engine.
-     * Это предотвращает нативный краш при вызове generate() на
-     * уже освобождённом Engine (например, при смене модели во время генерации).
+     * Проверяем isClosed перед использованием engine — это предотвращает
+     * нативный краш при вызове на уже освобождённом Engine
+     * (например, при смене модели во время генерации).
      */
     fun generateResponseStreaming(
         prompt: String,
         systemPrompt: String = "",
         onPartial: (String) -> Unit
     ): Flow<String> = flow {
-        // FIX #3: быстрая проверка до обращения к нативному объекту
+        // Быстрая проверка до обращения к нативному объекту
         if (isClosed) throw IllegalStateException("LiteRtLmEngine был закрыт во время генерации")
 
         val eng = engine
             ?: throw IllegalStateException("LiteRtLmEngine не инициализирован")
 
         val convConfig = if (systemPrompt.isNotBlank()) {
-            ConversationConfig.Builder()
-                .setSystemPrompt(systemPrompt)
-                .build()
+            // systemInstruction имеет тип Contents? — оборачиваем строку.
+            ConversationConfig(systemInstruction = Contents.of(systemPrompt))
         } else {
-            ConversationConfig.Builder().build()
+            ConversationConfig()
         }
 
         eng.createConversation(convConfig).use { conversation ->
-            val responseFlow = conversation.generateResponse(prompt)
-            responseFlow.collect { token ->
-                // Проверяем флаг на каждом токене — closeInternal() мог быть
+            // sendMessageAsync(text) возвращает Flow<Message>; текст чанка — toString().
+            conversation.sendMessageAsync(prompt).collect { message ->
+                // Проверяем флаг на каждом сообщении — closeInternal() мог быть
                 // вызван уже после старта генерации
                 if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
+                val token = message.toString()
                 onPartial(token)
                 emit(token)
             }
@@ -181,21 +213,18 @@ class LiteRtLmEngine @Inject constructor(
 
     private fun closeInternal() {
         isClosed = true   // выставляем флаг ДО освобождения объекта
-        try { engine?.close() } catch (e: Throwable) { Log.w(TAG, "close error", e) }
+        val eng = engine
         engine = null
         activeModelInfo = null
-        // isClosed остаётся true до следующего успешного initialize()
-    }
-
-    private fun tryBuildConfig(modelFile: File, useGpu: Boolean): EngineConfig? {
-        return try {
-            EngineConfig.Builder()
-                .setModelPath(modelFile.absolutePath)
-                .setBackend(if (useGpu) Backend.GPU else Backend.CPU)
-                .build()
-        } catch (e: Throwable) {
-            Log.w(TAG, "Config build failed (gpu=$useGpu): ${e.message}")
-            null
+        // Engine.close() бросает IllegalStateException, если движок не инициализирован —
+        // закрываем только корректно инициализированный экземпляр.
+        if (eng != null && eng.isInitialized()) {
+            try {
+                eng.close()
+            } catch (e: Throwable) {
+                Log.w(TAG, "Engine close error", e)
+            }
         }
+        // isClosed остаётся true до следующего успешного initialize()
     }
 }
