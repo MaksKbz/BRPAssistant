@@ -277,6 +277,9 @@ ${histBlock(history)}
             PromptStyle.PHI3 -> {
                 "<|system|>\n$system<|end|>\n<|user|>\n$content<|end|>\n<|assistant|>\n"
             }
+            PromptStyle.GEMMA -> {
+                "<start_of_turn>user\n$system\n\n$content<end_of_turn>\n<start_of_turn>model\n"
+            }
         }
     }
 
@@ -300,6 +303,9 @@ ${histBlock(history)}
             }
             PromptStyle.PHI3 -> {
                 "<|system|>\n$systemMessage<|end|>\n<|user|>\n$fullUserMessage<|end|>\n<|assistant|>\n"
+            }
+            PromptStyle.GEMMA -> {
+                "<start_of_turn>user\n$systemMessage\n\n$fullUserMessage<end_of_turn>\n<start_of_turn>model\n"
             }
         }
     }

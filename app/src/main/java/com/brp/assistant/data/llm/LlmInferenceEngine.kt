@@ -162,8 +162,9 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun tryInitMediaPipeWithCpuFallback(modelFile: File): Result<Unit> {
-        // Попытка 1: дефолтный бэкенд (GPU/NPU)
-        try {
+        // MediaPipe tasks-genai 0.10.14 не предоставляет явного выбора бэкенда
+        // (setPreferredBackend отсутствует) — инициализируем на дефолтном бэкенде.
+        return try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
                 .setMaxTokens(MAX_TOKENS)
@@ -171,24 +172,9 @@ class LlmInferenceEngine @Inject constructor(
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
             Log.i(TAG, "MediaPipe initialized with default backend")
-            return Result.success(Unit)
-        } catch (e: Throwable) {
-            Log.w(TAG, "MediaPipe default backend failed, retrying with CPU: ${e.message}")
-        }
-
-        // Попытка 2: явный CPU-бэкенд (универсальный fallback)
-        return try {
-            val cpuOptions = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelFile.absolutePath)
-                .setMaxTokens(MAX_TOKENS)
-                .setTemperature(DEFAULT_TEMP)
-                .setPreferredBackend(LlmInference.Backend.CPU)
-                .build()
-            mediaPipeInference = LlmInference.createFromOptions(context, cpuOptions)
-            Log.i(TAG, "MediaPipe initialized with CPU fallback")
             Result.success(Unit)
         } catch (e: Throwable) {
-            Log.e(TAG, "MediaPipe CPU fallback also failed", e)
+            Log.e(TAG, "MediaPipe init failed (default backend)", e)
             Result.failure(e)
         }
     }

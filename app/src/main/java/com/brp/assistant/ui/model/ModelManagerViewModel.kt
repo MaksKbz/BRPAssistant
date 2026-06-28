@@ -168,7 +168,7 @@ class ModelManagerViewModel @Inject constructor(
 
     fun deleteModel(model: OfflineModelInfo) {
         viewModelScope.launch {
-            if (llmEngine.deleteModel(model)) {
+            if (llmEngine.deleteModel(model).getOrDefault(false)) {
                 if (model.isCustom) customModelManager.removeCustomModel(model.id)
                 refreshModels()
             }

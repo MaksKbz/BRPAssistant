@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -39,9 +41,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // Kotlin 2.3 убрал DSL kotlinOptions { jvmTarget = "17" } (String).
+    // jvmTarget настраивается через compilerOptions (см. блок kotlin {} ниже).
     buildFeatures {
         compose = true
         buildConfig = true
@@ -54,6 +55,13 @@ android {
             // LiteRT-LM .so библиотеки требуют legacy packaging
             useLegacyPackaging = true
         }
+    }
+}
+
+// Kotlin 2.3: новый DSL для jvmTarget (взамен удалённого kotlinOptions).
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -111,7 +119,8 @@ dependencies {
 
     // Движок 2: LiteRT-LM — поддерживает .litertlm файлы (Qwen3, Gemma4 и др.)
     // Документация: https://developers.google.com/edge/litert-lm/android
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.1.1")
+    // Версии: https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-android
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.13.1")
 
     // llmedge удалён — устаревший beta-движок с нестабильным API
 

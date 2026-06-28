@@ -34,6 +34,8 @@ data class HealthStatus(
 ) {
     /** Приложение полностью работоспособно: диска достаточно, БД в порядке. */
     val isHealthy: Boolean get() = dbOk && diskFreeGb >= MIN_DISK_FREE_GB
+    val isLowDisk: Boolean get() = diskFreeGb < MIN_DISK_FREE_GB
+    val isDbError: Boolean get() = !dbOk
 
     companion object {
         /** Минимум свободного места для нормальной работы (кэш, загрузка моделей). */

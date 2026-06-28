@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.brp.assistant.data.llm.CircuitBreaker
 import com.brp.assistant.data.llm.RetryPolicy
 import com.brp.assistant.data.repository.ChatSessionRepository
+import com.brp.assistant.data.repository.SettingsRepository
 import com.brp.assistant.domain.AppHealthChecker
 import com.brp.assistant.domain.usecase.ConversationSummaryUseCase
 import dagger.Module
@@ -81,8 +82,9 @@ object DatabaseModule {
     @Singleton
     fun provideAppHealthChecker(
         @ApplicationContext context: Context,
-        db: BrpDatabase
-    ): AppHealthChecker = AppHealthChecker(context, db)
+        db: BrpDatabase,
+        settingsRepository: SettingsRepository
+    ): AppHealthChecker = AppHealthChecker(context, db.chatSessionDao(), settingsRepository)
 
     /**
      * #15 — RetryPolicy.

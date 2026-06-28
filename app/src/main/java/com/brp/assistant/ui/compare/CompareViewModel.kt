@@ -32,7 +32,7 @@ class CompareViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val models = modelRepository.getAll()
+            val models = modelRepository.getAllModels()
             _state.update { it.copy(allModels = models) }
         }
     }

@@ -1,6 +1,7 @@
 package com.brp.assistant.ui.navigation
 
 import android.content.res.Configuration
+import com.brp.assistant.data.db.entities.BrpModel
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import androidx.compose.foundation.layout.*
@@ -101,7 +102,7 @@ fun BrpNavGraph(
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
     val selectedVehicleName by mainViewModel.selectedVehicleName.collectAsStateWithLifecycle()
-    val selectedVehicle     by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
+    val selectedVehicle: BrpModel? by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
     val healthWarning       by mainViewModel.healthWarning.collectAsStateWithLifecycle()
@@ -205,7 +206,7 @@ private fun ExpandedLayout(
     currentRoute: String?,
     selectedVehicleId: String?,
     selectedVehicleName: String?,
-    selectedVehicle: Any?,
+    selectedVehicle: BrpModel?,
     activeModelName: String?,
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass
@@ -483,7 +484,7 @@ private fun NavHostContent(
     mainViewModel: MainViewModel,
     selectedVehicleId: String?,
     selectedVehicleName: String?,
-    selectedVehicle: Any?,
+    selectedVehicle: BrpModel?,
     activeModelName: String?,
     currentTheme: String,
     healthWarning: String?,
@@ -688,8 +689,8 @@ private fun NavHostContent(
                 onAddFromFile        = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
                 onAddFromUrl         = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
                 onUpdateApiKey       = { modelVm.updateApiKey(it) },
-                onUpdateProvider     = { modelVm.updateProvider(it) },
-                onUpdateModel        = { modelVm.updateModel(it) },
+                onUpdateProvider     = { modelVm.updateAiProvider(it) },
+                onUpdateModel        = { modelVm.updateAiModel(it) },
                 onUpdateSystemPrompt = { modelVm.updateSystemPrompt(it) },
                 onUpdateTemperature  = { modelVm.updateTemperature(it) },
                 onClearError         = { modelVm.clearError() },

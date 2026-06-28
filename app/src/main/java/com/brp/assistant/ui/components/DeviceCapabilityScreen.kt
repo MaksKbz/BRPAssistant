@@ -35,7 +35,7 @@ fun DeviceCapabilityScreen(
     modifier: Modifier = Modifier
 ) {
     val totalRamGb = "%.1f".format(memoryStatus.totalRamMb / 1024.0)
-    val isLowRam   = !memoryStatus.isSafeForLocalLlm
+    val isLowRam   = !memoryStatus.isSafeForGeneration
 
     Column(
         modifier = modifier
