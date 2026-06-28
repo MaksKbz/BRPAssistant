@@ -17,15 +17,27 @@ class App : Application(), Configuration.Provider {
     lateinit var workerFactory: HiltWorkerFactory
 
     /**
-     * #5 — Health Check инжектируется и запускается при старте.
-     * Результат доступен через AppHealthChecker.status (StateFlow);
-     * ChatViewModel и SettingsViewModel могут подписаться на него.
+     * #5 / #10 — Health Check инжектируется и запускается при старте.
+     *
+     * runChecks() выполняет три проверки асинхронно в IO-диспетчере:
+     *   1. Свободное место на диске (>= 500 MB)
+     *   2. Доступность БД (пробный SELECT)
+     *   3. Наличие хотя бы одного API-ключа
+     *
+     * Результат публикуется в AppHealthChecker.status (StateFlow<HealthStatus>).
+     * Потребители:
+     *   • ChatViewModel — подписывается и показывает предупреждение в UI
+     *   • ChatSessionRepository (#8) — используется как пример safe-репозитория
+     *     (не использует healthChecker напрямую, но следует тому же паттерну
+     *     изоляции ошибок БД через safeQuery { })
      */
     @Inject
     lateinit var healthChecker: AppHealthChecker
 
     override fun onCreate() {
         super.onCreate()
+        // #10: healthChecker.runChecks() — подключён здесь.
+        // Статус доступен всем подписчикам через healthChecker.status StateFlow.
         healthChecker.runChecks()
     }
 
