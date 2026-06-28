@@ -7,6 +7,7 @@ import com.brp.assistant.data.db.enteties.BrpModel
 import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.ModelRepository
+import com.brp.assistant.domain.AppHealthChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,7 +19,12 @@ import javax.inject.Inject
 class MainViewModel @Inject constructor(
     private val modelRepository: ModelRepository,
     private val llmEngine: LlmInferenceEngine,
-    private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository
+    private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository,
+    /**
+     * B2 — AppHealthChecker подключён к MainViewModel чтобы healthWarning
+     * был доступен на HomeScreen и в BrpNavGraph, а не только в ChatScreen.
+     */
+    private val healthChecker: AppHealthChecker
 ) : ViewModel() {
 
     private val _selectedVehicleId = MutableStateFlow<String?>(null)
@@ -39,6 +45,13 @@ class MainViewModel @Inject constructor(
     private val _appTheme = MutableStateFlow("System")
     val appTheme: StateFlow<String> = _appTheme.asStateFlow()
 
+    /**
+     * B2 — healthWarning: null = всё хорошо, строка = текст предупреждения.
+     * HomeScreen и любой другой экран может подписаться через collectAsStateWithLifecycle().
+     */
+    private val _healthWarning = MutableStateFlow<String?>(null)
+    val healthWarning: StateFlow<String?> = _healthWarning.asStateFlow()
+
     init {
         viewModelScope.launch {
             settingsRepository.appTheme.collect { theme ->
@@ -58,7 +71,6 @@ class MainViewModel @Inject constructor(
                 }
             }
         }
-
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 Log.d("MainViewModel", "Active model changed to: $id")
@@ -68,31 +80,26 @@ class MainViewModel @Inject constructor(
                 }
             }
         }
+        // B2 — подписка на AppHealthChecker.status
+        viewModelScope.launch {
+            healthChecker.status.collect { status ->
+                _healthWarning.value = when {
+                    status.isLowDisk -> "⚠️ Мало места на диске. Освободите память для стабильной работы."
+                    status.isDbError -> "❌ Ошибка БД. Перезапустите приложение."
+                    else             -> null
+                }
+            }
+        }
     }
 
     fun selectVehicle(model: BrpModel) {
         viewModelScope.launch {
             settingsRepository.setSelectedVehicleId(model.id)
-            // StateFlow обновляются автоматически через collect-поток в init{}
         }
     }
 
-    /**
-     * FIX #2: добавлен settingsRepository.setSelectedVehicleId(id).
-     *
-     * Раньше эта перегрузка записывала id/name напрямую в StateFlow,
-     * обходя DataStore. После перезапуска приложения DataStore считывался
-     * с null, сбрасывая выбранную технику.
-     *
-     * Теперь: settingsRepository.setSelectedVehicleId(id) вызывается явно,
-     * а StateFlow обновляются автоматически через collect-поток в init{},
-     * как это работает в первой перегрузке (BrpModel).
-     * Прямая запись больше не нужна.
-     */
     fun selectVehicle(id: String, name: String) {
         viewModelScope.launch {
-            // FIX #2: добавлен вызов settingsRepository, чтобы выбортехники
-            // переживал перезапуск. StateFlow обновится автоматически через collect
             settingsRepository.setSelectedVehicleId(id)
             try {
                 _selectedVehicle.value = modelRepository.getById(id)

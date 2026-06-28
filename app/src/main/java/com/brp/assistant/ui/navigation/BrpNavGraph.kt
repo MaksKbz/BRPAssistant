@@ -36,6 +36,7 @@ import com.brp.assistant.ui.maintenance.MaintenanceScreen
 import com.brp.assistant.ui.maintenance.MaintenanceViewModel
 import com.brp.assistant.ui.vehicle.VehicleSelectScreen
 import com.brp.assistant.ui.vehicle.VehicleSelectViewModel
+import java.lang.ref.WeakReference
 
 sealed class Screen(val route: String, val label: String) {
     data object ModelManager  : Screen("model-manager",  "Настройки ИИ")
@@ -63,13 +64,25 @@ private data class NavItem(
     val iconContent: @Composable () -> Unit
 )
 
-// FIX: явный screen= параметр во всех NavItem-вызовах.
 private val navItems = listOf(
     NavItem(screen = Screen.Home)          { Icon(Icons.Default.Home,          contentDescription = Screen.Home.label) },
     NavItem(screen = Screen.Diagnose)      { Icon(Icons.Default.Build,         contentDescription = Screen.Diagnose.label) },
     NavItem(screen = Screen.AccessoryShop) { Icon(Icons.Default.ShoppingBag,   contentDescription = Screen.AccessoryShop.label) },
     NavItem(screen = Screen.VehicleSelect) { Icon(Icons.Default.DirectionsCar, contentDescription = Screen.VehicleSelect.label) }
 )
+
+/**
+ * A1 — Заменяем голый var на WeakReference, чтобы избежать утечки памяти.
+ * ExpandedLayout обращается через .get(), который возвращает null если VM уже
+ * собрана GC после onDispose.
+ */
+object SharedChatVmHolder {
+    private var ref: WeakReference<ChatViewModel>? = null
+
+    var chatVm: ChatViewModel?
+        get()      = ref?.get()
+        set(value) { ref = value?.let { WeakReference(it) } }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,8 +102,9 @@ fun BrpNavGraph(
     val selectedVehicle     by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
+    // B2 — healthWarning из MainViewModel
+    val healthWarning       by mainViewModel.healthWarning.collectAsStateWithLifecycle()
 
-    // FIX #6: 7" планшеты в portrait дают Compact (360-599dp), в landscape — Medium.
     val configuration = LocalConfiguration.current
     val effectiveSizeClass = when {
         widthSizeClass == WindowWidthSizeClass.Expanded -> WindowWidthSizeClass.Expanded
@@ -194,7 +208,12 @@ private fun ExpandedLayout(
     widthSizeClass: WindowWidthSizeClass
 ) {
     val isChatRoute = currentRoute?.startsWith("chat/") == true
-    val chatState = SharedChatVmHolder.chatVm?.state?.collectAsStateWithLifecycle()
+    // A1 — используем WeakReference-holder; chatVm может быть null если VM собрана
+    val vm = SharedChatVmHolder.chatVm
+    val chatState = vm?.state?.collectAsStateWithLifecycle()
+
+    // B1 — поисковый запрос в боковой панели истории (expanded layout)
+    var panelSearch by remember { mutableStateOf("") }
 
     Row(
         modifier = Modifier
@@ -294,10 +313,10 @@ private fun ExpandedLayout(
             }
         }
 
+        // B1 — боковая панель истории чата с полем поиска
         if (isChatRoute && chatState != null) {
-            val vm = SharedChatVmHolder.chatVm
             Surface(
-                modifier      = Modifier
+                modifier       = Modifier
                     .width(280.dp)
                     .fillMaxHeight(),
                 tonalElevation = 1.dp
@@ -318,6 +337,24 @@ private fun ExpandedLayout(
 
                     Spacer(Modifier.height(8.dp))
 
+                    // B1 — поле поиска в expanded боковой панели
+                    OutlinedTextField(
+                        value         = panelSearch,
+                        onValueChange = { panelSearch = it },
+                        placeholder   = { Text("Поиск", style = MaterialTheme.typography.bodySmall) },
+                        leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon  = if (panelSearch.isNotEmpty()) {{
+                            IconButton(onClick = { panelSearch = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(16.dp))
+                            }
+                        }} else null,
+                        singleLine    = true,
+                        modifier      = Modifier.fillMaxWidth(),
+                        textStyle     = MaterialTheme.typography.bodySmall
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+
                     Text(
                         "История",
                         style    = MaterialTheme.typography.labelMedium,
@@ -327,11 +364,22 @@ private fun ExpandedLayout(
 
                     Spacer(Modifier.height(4.dp))
 
+                    // B1 — клиентская фильтрация по panelSearch
+                    val sessions = chatState.value.sessionHistory
+                    val filteredPanel = remember(sessions, panelSearch) {
+                        val q = panelSearch.trim().lowercase()
+                        if (q.isEmpty()) sessions
+                        else sessions.filter {
+                            it.title.lowercase().contains(q) ||
+                            it.vehicleName?.lowercase()?.contains(q) == true
+                        }
+                    }
+
                     LazyColumn(
                         modifier            = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        items(chatState.value.sessionHistory, key = { it.id }) { session ->
+                        items(filteredPanel, key = { it.id }) { session ->
                             val isSelected = session.id == chatState.value.selectedSessionId
                             Surface(
                                 onClick        = { vm?.loadSession(session.id) },
@@ -348,17 +396,17 @@ private fun ExpandedLayout(
                                         .padding(horizontal = 10.dp, vertical = 8.dp)
                                 ) {
                                     Text(
-                                        text     = session.title,
-                                        style    = MaterialTheme.typography.bodySmall,
+                                        text       = session.title,
+                                        style      = MaterialTheme.typography.bodySmall,
                                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
+                                        maxLines   = 2,
+                                        overflow   = TextOverflow.Ellipsis
                                     )
                                     if (!session.vehicleName.isNullOrBlank()) {
                                         Text(
-                                            text  = session.vehicleName,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            text     = session.vehicleName,
+                                            style    = MaterialTheme.typography.labelSmall,
+                                            color    = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -388,14 +436,6 @@ private fun ExpandedLayout(
             modifier            = Modifier.weight(1f).fillMaxHeight()
         )
     }
-}
-
-/**
- * FIX #2: синглтон-холдер для передачи единственного экземпляра ChatViewModel
- * между ExpandedLayout и NavHostContent без activityViewModel().
- */
-object SharedChatVmHolder {
-    var chatVm: ChatViewModel? = null
 }
 
 @Composable
@@ -527,7 +567,7 @@ private fun NavHostContent(
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
 
-            // FIX #2: регистрируем единственный экземпляр ChatViewModel в холдере.
+            // A1 — регистрируем через WeakReference-holder
             DisposableEffect(chatVm) {
                 SharedChatVmHolder.chatVm = chatVm
                 onDispose { SharedChatVmHolder.chatVm = null }
@@ -555,7 +595,6 @@ private fun NavHostContent(
                 currentOnlineProvider  = state.currentOnlineProvider,
                 selectedLlmModelId     = state.selectedLlmModelId,
                 selectedOnlineProvider = state.selectedOnlineProvider,
-                // #2 — передаём флаг отсутствия ключа из ViewModel
                 hasOnlineKeyMissing    = state.hasOnlineKeyMissing,
                 onSelectOfflineLlm     = { chatVm.selectOfflineLlm(it) },
                 onSelectOnlineLlm      = { chatVm.selectOnlineLlm(it) },
@@ -570,16 +609,17 @@ private fun NavHostContent(
                 onNewChat              = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, mode) }
             )
         }
+        // A2 — DiagnoseScreen и AccessoryShopScreen больше не создают
+        // stub-ChatViewModel: они сразу навигируют в chat/{mode}.
+        // Лишние hiltViewModel()-вызовы убраны.
         composable(Screen.Diagnose.route) {
-            val chatVm: ChatViewModel = hiltViewModel()
-            val state by chatVm.state.collectAsStateWithLifecycle()
             DiagnoseScreen(
                 selectedVehicle    = selectedVehicle,
-                messages           = state.messages,
-                riskLevel          = state.riskLevel,
-                requiresEvacuation = state.requiresEvacuation,
-                isGenerating       = state.isGenerating,
-                isModelReady       = state.isModelReady,
+                messages           = emptyList(),
+                riskLevel          = "low",
+                requiresEvacuation = false,
+                isGenerating       = false,
+                isModelReady       = true,
                 commonSymptoms     = listOf(
                     "Двигатель не заводится", "Не включается 4WD",
                     "Проблемы с CVT ремнём", "Перегрев двигателя",
@@ -594,13 +634,11 @@ private fun NavHostContent(
             )
         }
         composable(Screen.AccessoryShop.route) {
-            val chatVm: ChatViewModel = hiltViewModel()
-            val state by chatVm.state.collectAsStateWithLifecycle()
             AccessoryShopScreen(
                 selectedVehicle      = selectedVehicle,
-                messages             = state.messages,
-                isGenerating         = state.isGenerating,
-                isModelReady         = state.isModelReady,
+                messages             = emptyList(),
+                isGenerating         = false,
+                isModelReady         = true,
                 popularCategories    = listOf(
                     "Хранение LinQ", "Защита", "Комфорт", "Освещение",
                     "Аудио", "Лебёдки", "Ветровые стёкла", "Крыши/Кабины"

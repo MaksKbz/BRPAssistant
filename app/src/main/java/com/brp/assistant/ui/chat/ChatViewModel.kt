@@ -1,5 +1,6 @@
 package com.brp.assistant.ui.chat
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.brp.assistant.data.db.entities.ChatMessageEntity
@@ -31,6 +32,9 @@ import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
+private const val KEY_SESSION_ID = "saved_session_id"
+private const val KEY_MODE       = "saved_mode"
+
 data class OfflineModelUiItem(
     val model: OfflineModelInfo,
     val isDownloaded: Boolean
@@ -61,20 +65,8 @@ data class ChatState(
     val currentOnlineProvider: String = "Gemini",
     val sessionHistory: List<ChatSessionSummary> = emptyList(),
     val selectedSessionId: String? = null,
-    /**
-     * #2 — true когда активен онлайн-провайдер, но API-ключ не задан.
-     */
     val hasOnlineKeyMissing: Boolean = false,
-    /**
-     * #12 — Предупреждение от AppHealthChecker:
-     *   null  = всё хорошо
-     *   строка = текст предупреждения для показа в HealthWarningBanner
-     */
     val healthWarning: String? = null,
-    /**
-     * #13 — Текущий запрос поиска по истории чатов.
-     * Пустая строка = поиск отключён, показывается полный список sessionHistory.
-     */
     val searchQuery: String = ""
 )
 
@@ -84,32 +76,41 @@ class ChatViewModel @Inject constructor(
     private val diagnoseUseCase: DiagnoseUseCase,
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: SettingsRepository,
-    /**
-     * #11 — Заменяет прямое использование ChatSessionDao.
-     * Все вызовы к БД теперь через репозиторий с изоляцией ошибок.
-     */
     private val chatRepo: ChatSessionRepository,
-    /**
-     * #9 / #11 — Генерация title сессии без API-вызова.
-     */
     private val summaryUseCase: ConversationSummaryUseCase,
-    /**
-     * #12 — Для подписки на AppHealthChecker.status.
-     */
     private val healthChecker: AppHealthChecker,
-    private val deviceCapability: DeviceCapabilityProvider
+    private val deviceCapability: DeviceCapabilityProvider,
+    /**
+     * A3 — SavedStateHandle позволяет пережить гибель процесса Android (OOM-kill).
+     * selectedSessionId и currentMode восстанавливаются автоматически.
+     */
+    private val savedState: SavedStateHandle
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    private var activeSessionId: String? = null
+    /**
+     * A3 — activeSessionId восстанавливается из SavedStateHandle после process death.
+     * При каждом изменении сохраняем обратно.
+     */
+    private var activeSessionId: String?
+        get()      = savedState[KEY_SESSION_ID]
+        set(value) { savedState[KEY_SESSION_ID] = value }
 
-    /** FIX #3: хранит текущий job генерации — предыдущая отменяется. */
+    private var savedMode: String?
+        get()      = savedState[KEY_MODE]
+        set(value) { savedState[KEY_MODE] = value }
+
     private var generationJob: Job? = null
 
     init {
-        // isModelReady
+        // A3 — если процесс убит и пересоздан, восстанавливаем сессию
+        val restoredSessionId = savedState.get<String>(KEY_SESSION_ID)
+        if (restoredSessionId != null) {
+            viewModelScope.launch { loadSession(restoredSessionId) }
+        }
+
         viewModelScope.launch {
             combine(
                 llmEngine.activeModelId,
@@ -127,32 +128,24 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // allOfflineModels + activeOfflineModelId
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 val items = PublicOfflineModelCatalog.models.map { model ->
                     OfflineModelUiItem(
-                        model = model,
+                        model        = model,
                         isDownloaded = llmEngine.isModelDownloaded(model)
                     )
                 }
-                _state.update { s ->
-                    s.copy(
-                        activeOfflineModelId = id,
-                        allOfflineModels = items
-                    )
-                }
+                _state.update { s -> s.copy(activeOfflineModelId = id, allOfflineModels = items) }
             }
         }
 
-        // currentOnlineProvider
         viewModelScope.launch {
             settingsRepository.aiProvider.collect { p ->
                 _state.update { it.copy(currentOnlineProvider = p ?: "Gemini") }
             }
         }
 
-        // #11 — sessionHistory через репозиторий
         viewModelScope.launch {
             chatRepo.observeAll().collect { entities ->
                 val summaries = entities.map { entity ->
@@ -168,7 +161,6 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // #2 — hasOnlineKeyMissing
         viewModelScope.launch {
             combine(
                 settingsRepository.aiProvider,
@@ -186,41 +178,24 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // #12 — healthWarning из AppHealthChecker
         viewModelScope.launch {
             healthChecker.status.collect { status ->
                 val warning = when {
-                    status.isLowDisk    -> "⚠️ Мало места на диске. Освободите память для стабильной работы."
-                    status.isDbError    -> "❌ Ошибка БД. Перезапустите приложение."
-                    else                -> null
+                    status.isLowDisk -> "⚠️ Мало места на диске. Освободите память для стабильной работы."
+                    status.isDbError -> "❌ Ошибка БД. Перезапустите приложение."
+                    else             -> null
                 }
                 _state.update { it.copy(healthWarning = warning) }
             }
         }
     }
 
-    // ── #13 Поиск по истории ───────────────────────────────────────────
+    // ── Поиск по истории ──────────────────────────────────────────────
 
-    /**
-     * #13 — Обновляет запрос поиска.
-     *
-     * UI вызывает через debounce на TextField.onValueChange:
-     * ```kotlin
-     * TextField(onValueChange = { vm.updateSearchQuery(it) })
-     * ```
-     * LazyColumn фильтрует state.filteredSessions (см. ниже).
-     */
     fun updateSearchQuery(query: String) {
         _state.update { it.copy(searchQuery = query) }
     }
 
-    /**
-     * #13 — Отфильтрованный список сессий для UI.
-     *
-     * Клиентская фильтрация по title + vehicleName.
-     * Достаточно до ~200 сессий; при росте > 200 переключить
-     * на repo.search(query) через Flow с debounce.
-     */
     val filteredSessions: StateFlow<List<ChatSessionSummary>> = _state
         .map { s ->
             val q = s.searchQuery.trim().lowercase()
@@ -231,56 +206,37 @@ class ChatViewModel @Inject constructor(
             }
         }
         .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = emptyList()
+            scope          = viewModelScope,
+            started        = SharingStarted.WhileSubscribed(5_000),
+            initialValue   = emptyList()
         )
 
-    // ── #14 Управление сессиями ──────────────────────────────────────
+    // ── Управление сессиями ──────────────────────────────────────────
 
-    /**
-     * #14 — Удалить одну сессию.
-     * Если удаляется активная сессия — очищаем экран.
-     */
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
             chatRepo.deleteSession(sessionId)
             if (activeSessionId == sessionId) {
                 activeSessionId = null
                 _state.update {
-                    it.copy(
-                        messages           = emptyList(),
-                        selectedSessionId  = null,
-                        isGenerating       = false,
-                        error              = null
-                    )
+                    it.copy(messages = emptyList(), selectedSessionId = null,
+                        isGenerating = false, error = null)
                 }
             }
         }
     }
 
-    /**
-     * #14 — Удалить все сессии и очистить экран.
-     */
     fun deleteAllSessions() {
         viewModelScope.launch {
             chatRepo.deleteAll()
             activeSessionId = null
             _state.update {
-                it.copy(
-                    messages          = emptyList(),
-                    selectedSessionId = null,
-                    isGenerating      = false,
-                    error             = null
-                )
+                it.copy(messages = emptyList(), selectedSessionId = null,
+                    isGenerating = false, error = null)
             }
         }
     }
 
-    /**
-     * #14 — Дублировать сессию: копирует сессию и все её сообщения с новым UUID.
-     * Титул новой сессии: "Копия: <оригинальный title>".
-     */
     fun duplicateSession(sessionId: String) {
         viewModelScope.launch {
             val original = chatRepo.getSession(sessionId) ?: return@launch
@@ -288,17 +244,11 @@ class ChatViewModel @Inject constructor(
             val newId  = UUID.randomUUID().toString()
             val now    = System.currentTimeMillis()
             chatRepo.upsert(
-                original.copy(
-                    id        = newId,
-                    title     = "Копия: ${original.title}",
-                    createdAt = now,
-                    updatedAt = now
-                )
+                original.copy(id = newId, title = "Копия: ${original.title}",
+                    createdAt = now, updatedAt = now)
             )
             messages.forEach { msg ->
-                chatRepo.insertMessage(
-                    msg.copy(id = UUID.randomUUID().toString(), sessionId = newId)
-                )
+                chatRepo.insertMessage(msg.copy(id = UUID.randomUUID().toString(), sessionId = newId))
             }
         }
     }
@@ -314,36 +264,40 @@ class ChatViewModel @Inject constructor(
                     role    = if (e.role == "user") MessageRole.USER else MessageRole.ASSISTANT
                 )
             }
+            // A3 — сохраняем в SavedStateHandle
             activeSessionId = sessionId
+            savedMode = session.mode
             _state.update {
                 it.copy(
-                    messages            = messages,
-                    selectedSessionId   = sessionId,
-                    currentVehicleId    = session.vehicleId,
-                    currentVehicleName  = session.vehicleName,
-                    currentMode         = session.mode,
-                    isGenerating        = false,
-                    riskLevel           = "low",
-                    requiresEvacuation  = false,
-                    error               = null
+                    messages           = messages,
+                    selectedSessionId  = sessionId,
+                    currentVehicleId   = session.vehicleId,
+                    currentVehicleName = session.vehicleName,
+                    currentMode        = session.mode,
+                    isGenerating       = false,
+                    riskLevel          = "low",
+                    requiresEvacuation = false,
+                    error              = null
                 )
             }
         }
     }
 
     fun startNewChat(vehicleId: String?, vehicleName: String?, mode: String) {
+        // A3 — сбрасываем SavedStateHandle при явном создании нового чата
         activeSessionId = null
+        savedMode = mode
         _state.update {
             it.copy(
-                messages            = emptyList(),
-                selectedSessionId   = null,
-                isGenerating        = false,
-                riskLevel           = "low",
-                requiresEvacuation  = false,
-                error               = null,
-                currentVehicleId    = vehicleId,
-                currentVehicleName  = vehicleName,
-                currentMode         = mode
+                messages           = emptyList(),
+                selectedSessionId  = null,
+                isGenerating       = false,
+                riskLevel          = "low",
+                requiresEvacuation = false,
+                error              = null,
+                currentVehicleId   = vehicleId,
+                currentVehicleName = vehicleName,
+                currentMode        = mode
             )
         }
     }
@@ -353,17 +307,18 @@ class ChatViewModel @Inject constructor(
         val contextChanged = current.currentVehicleId != vehicleId || current.currentMode != mode
         if (contextChanged) {
             activeSessionId = null
+            savedMode = mode
             _state.update {
                 it.copy(
-                    messages            = emptyList(),
-                    selectedSessionId   = null,
-                    isGenerating        = false,
-                    riskLevel           = "low",
-                    requiresEvacuation  = false,
-                    error               = null,
-                    currentVehicleId    = vehicleId,
-                    currentVehicleName  = vehicleName,
-                    currentMode         = mode
+                    messages           = emptyList(),
+                    selectedSessionId  = null,
+                    isGenerating       = false,
+                    riskLevel          = "low",
+                    requiresEvacuation = false,
+                    error              = null,
+                    currentVehicleId   = vehicleId,
+                    currentVehicleName = vehicleName,
+                    currentMode        = mode
                 )
             }
         }
@@ -395,11 +350,8 @@ class ChatViewModel @Inject constructor(
                 val oomMsg = "⚠️ Недостаточно памяти (heap: ~${mem.freeHeapMb} МБ, RAM: ~${mem.availRamMb} МБ). " +
                         "Закройте другие приложения и повторите."
                 _state.update {
-                    it.copy(
-                        isGenerating = false,
-                        error        = oomMsg,
-                        messages     = it.messages + ChatMessage(content = oomMsg, role = MessageRole.ASSISTANT)
-                    )
+                    it.copy(isGenerating = false, error = oomMsg,
+                        messages = it.messages + ChatMessage(content = oomMsg, role = MessageRole.ASSISTANT))
                 }
                 return@launch
             }
@@ -420,11 +372,9 @@ class ChatViewModel @Inject constructor(
                     }.collect { result ->
                         result.onSuccess { diag ->
                             _state.update {
-                                it.copy(
-                                    isGenerating       = false,
-                                    riskLevel          = diag.riskLevel,
-                                    requiresEvacuation = diag.requiresEvacuation
-                                )
+                                it.copy(isGenerating = false,
+                                    riskLevel = diag.riskLevel,
+                                    requiresEvacuation = diag.requiresEvacuation)
                             }
                         }.onFailure { err ->
                             _state.update { it.copy(isGenerating = false, error = err.message) }
@@ -451,8 +401,7 @@ class ChatViewModel @Inject constructor(
                 persistMessages(sessionId, resolvedVehicleName)
 
             } catch (oom: OutOfMemoryError) {
-                val oomMsg = "💾 Модель не поместилась в память. " +
-                        "Попробуйте легкую модель или перезапустите приложение."
+                val oomMsg = "💾 Модель не поместилась в память. Попробуйте легкую модель или перезапустите приложение."
                 _state.update { it.copy(isGenerating = false, error = oomMsg) }
                 updateLastMessage(oomMsg)
                 withContext(Dispatchers.Default) { System.gc() }
@@ -464,7 +413,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // #11 — ensureSession через репозиторий + ConversationSummaryUseCase
     private suspend fun ensureSession(
         firstMessage: String,
         vehicleId: String?,
@@ -474,7 +422,6 @@ class ChatViewModel @Inject constructor(
         activeSessionId?.let { return it }
         val id  = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
-        // #9/#11: используем ConversationSummaryUseCase вместо take(60)
         val title = summaryUseCase(
             listOf(ChatMessage(content = firstMessage, role = MessageRole.USER))
         )
@@ -489,18 +436,18 @@ class ChatViewModel @Inject constructor(
                 updatedAt   = now
             )
         )
+        // A3 — сохраняем в SavedStateHandle сразу после создания
         activeSessionId = id
+        savedMode       = mode
         _state.update { it.copy(selectedSessionId = id) }
         return id
     }
 
-    // #11 — persistMessages через репозиторий
     private suspend fun persistMessages(sessionId: String, vehicleName: String?) {
         val now      = System.currentTimeMillis()
         val messages = _state.value.messages
-        // #9/#11: титул через summaryUseCase — обрезает по слову, добавляет …
-        val title = summaryUseCase(messages)
-        val lastTwo = messages.takeLast(2)
+        val title    = summaryUseCase(messages)
+        val lastTwo  = messages.takeLast(2)
         lastTwo.forEach { msg ->
             chatRepo.insertMessage(
                 ChatMessageEntity(
@@ -512,12 +459,7 @@ class ChatViewModel @Inject constructor(
                 )
             )
         }
-        chatRepo.updateMeta(
-            id          = sessionId,
-            title       = title,
-            vehicleName = vehicleName,
-            updatedAt   = now
-        )
+        chatRepo.updateMeta(id = sessionId, title = title, vehicleName = vehicleName, updatedAt = now)
     }
 
     private fun updateLastMessage(content: String) {
