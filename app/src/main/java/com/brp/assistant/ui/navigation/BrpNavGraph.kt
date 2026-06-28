@@ -102,7 +102,7 @@ fun BrpNavGraph(
 
     val selectedVehicleId   by mainViewModel.selectedVehicleId.collectAsStateWithLifecycle()
     val selectedVehicleName by mainViewModel.selectedVehicleName.collectAsStateWithLifecycle()
-    val selectedVehicle     by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
+    val selectedVehicle: BrpModel? by mainViewModel.selectedVehicle.collectAsStateWithLifecycle()
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
     val healthWarning       by mainViewModel.healthWarning.collectAsStateWithLifecycle()
