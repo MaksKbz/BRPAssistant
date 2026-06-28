@@ -1,6 +1,6 @@
 package com.brp.assistant.data.situations
 
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.KnowledgeCard
 
 /**
  * Расширенная база офлайн-решений BRP.

@@ -4,9 +4,9 @@ import android.util.Log
 import com.brp.assistant.data.db.AccessoryDao
 import com.brp.assistant.data.db.KnowledgeDao
 import com.brp.assistant.data.db.ModelDao
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.data.rag.*
 import com.brp.assistant.domain.model.RetrievalMode
 import kotlinx.coroutines.flow.Flow

@@ -17,8 +17,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive

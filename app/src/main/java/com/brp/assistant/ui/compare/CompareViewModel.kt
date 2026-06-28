@@ -2,7 +2,7 @@ package com.brp.assistant.ui.compare
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.repository.ModelRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow

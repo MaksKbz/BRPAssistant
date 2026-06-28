@@ -229,6 +229,34 @@ def build_database():
         );
         CREATE INDEX index_accessory_compatibility_accessoryId ON accessory_compatibility(accessoryId);
         CREATE INDEX index_accessory_compatibility_modelId ON accessory_compatibility(modelId);
+
+        -- ── Чат-сессии (схема v5/v6). Таблицы пустые: история чата —
+        --    пользовательские данные, формируются в runtime. Нужны здесь,
+        --    чтобы asset-БД сразу соответствовала @Database(version = 6)
+        --    и Room открывала её без миграций при свежей установке. ──
+        CREATE TABLE chat_sessions (
+            id TEXT NOT NULL PRIMARY KEY,
+            title TEXT NOT NULL,
+            vehicleId TEXT,
+            vehicleName TEXT,
+            mode TEXT NOT NULL,
+            createdAt INTEGER NOT NULL,
+            updatedAt INTEGER NOT NULL
+        );
+        CREATE TABLE chat_messages (
+            id TEXT NOT NULL PRIMARY KEY,
+            sessionId TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX index_chat_messages_sessionId ON chat_messages(sessionId);
+
+        -- Версия схемы Room. ДОЛЖНА совпадать с @Database(version) в BrpDatabase.kt.
+        -- Без этого PRAGMA остаётся 0 → Room считает БД устаревшей и требует
+        -- миграцию, которой нет → IllegalStateException при первом запуске.
+        PRAGMA user_version = 6;
     """)
     
     # Insert models

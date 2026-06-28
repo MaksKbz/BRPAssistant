@@ -1,8 +1,8 @@
 package com.brp.assistant.data.rag
 
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import javax.inject.Inject
 import javax.inject.Singleton
 

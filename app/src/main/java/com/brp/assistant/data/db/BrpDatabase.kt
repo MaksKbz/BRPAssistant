@@ -31,6 +31,34 @@ import com.brp.assistant.data.db.entities.*
  *    Migration на этапе компиляции, а не в runtime у пользователей.
  */
 
+/**
+ * v3 → v4: приведение таблицы `fault_codes` в точное соответствие с [FaultCode] entity:
+ *  - PRIMARY KEY = `code` (TEXT), не авто-id;
+ *  - `possibleCauses` и `solution` — nullable (без DEFAULT '');
+ *  - удалён лишний столбец `severity`, которого нет в entity.
+ *
+ * Ранее несоответствие схемы вызывало IllegalStateException при открытии Room.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `fault_codes` (
+                `code` TEXT NOT NULL,
+                `brand` TEXT NOT NULL,
+                `description` TEXT NOT NULL,
+                `possibleCauses` TEXT,
+                `solution` TEXT,
+                PRIMARY KEY(`code`)
+            )
+            """.trimIndent()
+        )
+        database.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_fault_codes_brand` ON `fault_codes` (`brand`)"
+        )
+    }
+}
+
 val MIGRATION_4_5 = object : Migration(4, 5) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(

@@ -14,8 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.accessory.AccessoryData
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.ui.navigation.Screen

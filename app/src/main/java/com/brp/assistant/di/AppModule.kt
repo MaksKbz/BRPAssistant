@@ -1,12 +1,7 @@
 package com.brp.assistant.di
 
 import android.content.Context
-import androidx.room.Room
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.work.WorkManager
-import com.brp.assistant.data.db.BrpDatabase
-import com.brp.assistant.data.db.FaultCodeDao
 import com.brp.assistant.data.llm.PromptBuilder
 import dagger.Module
 import dagger.Provides
@@ -17,57 +12,20 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
+/**
+ * Прикладные синглтоны приложения.
+ *
+ * NOTE: провайдеры БД ([com.brp.assistant.data.db.BrpDatabase]) и DAO вынесены
+ * в [com.brp.assistant.data.db.DatabaseModule], чтобы вся конфигурация Room
+ * (createFromAsset, миграции) находилась в одном месте рядом с самой БД.
+ *
+ * Раньше [com.brp.assistant.data.db.BrpDatabase] предоставлялась ДВАЖДЫ —
+ * здесь и в DatabaseModule, что вызывало ошибку Dagger `DuplicateBindings`.
+ * Теперь единственный источник БД — DatabaseModule.
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
-
-    /**
-     * FIX #6 (обновлено): схема MIGRATION_3_4 приведена в точное соответствие
-     * с FaultCode entity в Entities.kt:
-     *   - PK = code (TEXT), не id
-     *   - possibleCauses и solution — nullable (без DEFAULT '')
-     *   - удалён лишний столбец severity, которого нет в entity
-     *
-     * Несовпадение схемы приводило к IllegalStateException при запуске Room.
-     */
-    private val MIGRATION_3_4 = object : Migration(3, 4) {
-        override fun migrate(database: SupportSQLiteDatabase) {
-            database.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS `fault_codes` (
-                    `code` TEXT NOT NULL,
-                    `brand` TEXT NOT NULL,
-                    `description` TEXT NOT NULL,
-                    `possibleCauses` TEXT,
-                    `solution` TEXT,
-                    PRIMARY KEY(`code`)
-                )
-                """.trimIndent()
-            )
-            database.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_fault_codes_brand` ON `fault_codes` (`brand`)"
-            )
-        }
-    }
-
-    @Provides
-    @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): BrpDatabase {
-        return Room.databaseBuilder(
-            context,
-            BrpDatabase::class.java,
-            "brp_assistant_v25.db"
-        )
-            .createFromAsset("brp_assistant.db")
-            .addMigrations(MIGRATION_3_4)
-            .fallbackToDestructiveMigrationFrom(1, 2)
-            .build()
-    }
-
-    @Provides fun provideModelDao(db: BrpDatabase) = db.modelDao()
-    @Provides fun provideAccessoryDao(db: BrpDatabase) = db.accessoryDao()
-    @Provides fun provideKnowledgeDao(db: BrpDatabase) = db.knowledgeDao()
-    @Provides fun provideFaultCodeDao(db: BrpDatabase): FaultCodeDao = db.faultCodeDao()
 
     @Provides
     @Singleton
@@ -84,8 +42,9 @@ object AppModule {
      *   - read: 30min (для загрузки модели)
      *   - write: 60s (для API запросов)
      *
-     * ModelDownloadWorker создаёт дочерний клиент через .newBuilder()
-     * только для переключения followRedirects без выделения новых ресурсов.
+     * ModelDownloadWorker / RemoteLlmEngine создают дочерние клиенты через
+     * .newBuilder() только для тонкой настройки (followRedirects, таймауты)
+     * без выделения новых ресурсов.
      */
     @Provides
     @Singleton

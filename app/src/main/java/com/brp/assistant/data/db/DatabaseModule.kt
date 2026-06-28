@@ -1,6 +1,7 @@
 package com.brp.assistant.data.db
 
 import android.content.Context
+import androidx.room.Room
 import com.brp.assistant.data.llm.CircuitBreaker
 import com.brp.assistant.data.llm.RetryPolicy
 import com.brp.assistant.data.repository.ChatSessionRepository
@@ -17,10 +18,33 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
 
+    /**
+     * Единственный провайдер [BrpDatabase] в графе Hilt.
+     *
+     * C4-fix: asset-БД `brp_assistant.db` теперь генерируется сразу схемой v6
+     * (см. tools/build_database.py: PRAGMA user_version = 6 + пустые chat-таблицы),
+     * поэтому при свежей установке Room открывает её без миграций.
+     *
+     * Цепочка миграций ниже нужна для ОБНОВЛЕНИЯ уже установленного приложения
+     * (когда на устройстве лежит БД более старой версии):
+     *   3→4 — fault_codes; 4→5 — chat-таблицы; 5→6 — vehicleName.
+     *
+     * v1–v2 не содержат пользовательских данных (только каталог из asset),
+     * поэтому для них безопасен fallbackToDestructiveMigrationFrom.
+     */
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): BrpDatabase =
-        BrpDatabase.getInstance(context)
+    fun provideDatabase(@ApplicationContext context: Context): BrpDatabase {
+        return Room.databaseBuilder(
+            context,
+            BrpDatabase::class.java,
+            "brp_assistant_v25.db"
+        )
+            .createFromAsset("brp_assistant.db")
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .fallbackToDestructiveMigrationFrom(1, 2)
+            .build()
+    }
 
     @Provides fun provideModelDao(db: BrpDatabase): ModelDao = db.modelDao()
     @Provides fun provideAccessoryDao(db: BrpDatabase): AccessoryDao = db.accessoryDao()

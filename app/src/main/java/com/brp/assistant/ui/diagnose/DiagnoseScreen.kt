@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.domain.model.EngineResultState
 import com.brp.assistant.domain.model.FaultCard

@@ -15,7 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

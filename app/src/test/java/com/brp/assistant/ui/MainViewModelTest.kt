@@ -1,6 +1,6 @@
 package com.brp.assistant.ui
 
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.repository.ModelRepository
 import com.brp.assistant.data.repository.SettingsRepository

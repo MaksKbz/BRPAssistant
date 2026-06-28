@@ -1,6 +1,6 @@
 package com.brp.assistant.ui.compare
 
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.repository.ModelRepository
 import io.mockk.*
 import io.mockk.impl.annotations.MockK

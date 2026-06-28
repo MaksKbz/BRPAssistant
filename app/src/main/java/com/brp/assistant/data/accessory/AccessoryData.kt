@@ -1,6 +1,6 @@
 package com.brp.assistant.data.accessory
 
-import com.brp.assistant.data.db.enteties.Accessory
+import com.brp.assistant.data.db.entities.Accessory
 
 object AccessoryData {
     val predefinedAccessories = listOf(

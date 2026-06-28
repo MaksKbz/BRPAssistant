@@ -3,7 +3,7 @@ package com.brp.assistant.ui
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.brp.assistant.data.db.enteties.BrpModel
+import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.ModelRepository

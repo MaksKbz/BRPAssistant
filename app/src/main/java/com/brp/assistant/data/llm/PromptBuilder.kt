@@ -1,8 +1,8 @@
 package com.brp.assistant.data.llm
 
-import com.brp.assistant.data.db.enteties.Accessory
-import com.brp.assistant.data.db.enteties.BrpModel
-import com.brp.assistant.data.db.enteties.KnowledgeCard
+import com.brp.assistant.data.db.entities.Accessory
+import com.brp.assistant.data.db.entities.BrpModel
+import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.domain.model.ChatMessage
 
 class PromptBuilder {
