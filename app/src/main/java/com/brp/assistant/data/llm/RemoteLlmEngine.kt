@@ -16,6 +16,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
 
 /**
  * Кастомное IOException-наследник для HTTP 429 Too Many Requests.
@@ -29,8 +30,10 @@ import javax.inject.Singleton
 private class Http429Exception(message: String) : IOException(message)
 
 /**
- * FIX #4: экспоненциальный backoff для повторных попыток.
- * maxAttempts=3: первый + 2 retry с задержкой 500ms → 1000ms.
+ * FIX #4: экспоненциальный backoff с jitter для повторных попыток.
+ * maxAttempts=3: первый + 2 retry с задержкой 500мс → 1000мс (+/- 20% jitter).
+ * Jitter предотвращает thundering herd если несколько пользователей
+ * одновременно получают 429 и все стучат в один момент.
  */
 private suspend fun <T> withRetry(
     maxAttempts: Int = 3,
@@ -41,8 +44,11 @@ private suspend fun <T> withRetry(
     var lastResult: Result<T> = Result.failure(Exception("Нет попыток"))
     repeat(maxAttempts) { attempt ->
         if (attempt > 0) {
-            val delayMs = initialDelayMs * (1L shl (attempt - 1))  // 500 → 1000 → 2000
-            Log.d("RemoteLlmEngine", "Retry $attempt after ${delayMs}ms")
+            val baseDelay = initialDelayMs * (1L shl (attempt - 1))  // 500 → 1000 → 2000
+            // ±20% jitter для предотвращения thundering herd
+            val jitter = (baseDelay * 0.2 * (Random.nextDouble() * 2 - 1)).toLong()
+            val delayMs = (baseDelay + jitter).coerceAtLeast(100L)
+            Log.d("RemoteLlmEngine", "Retry $attempt after ${delayMs}ms (base: ${baseDelay}ms, jitter: ${jitter}ms)")
             delay(delayMs)
         }
         lastResult = block()
@@ -56,8 +62,10 @@ private suspend fun <T> withRetry(
 /**
  * Предикат для shouldRetry: ретраит только сетевые ошибки (IOException),
  * включая Http429Exception. 4xx (кроме 429) — ошибки клиента, retry бессмыслен.
+ * Исключение — CircuitBreakerOpenException: не ретраим когда breaker OPEN.
  */
-private fun isRetryableError(e: Throwable): Boolean = e is IOException
+private fun isRetryableError(e: Throwable): Boolean =
+    e is IOException && e !is CircuitBreakerOpenException
 
 @Singleton
 class RemoteLlmEngine @Inject constructor(
@@ -65,6 +73,10 @@ class RemoteLlmEngine @Inject constructor(
     private val client: OkHttpClient
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    // Два отдельных breaker — по одному на провайдер
+    private val groqBreaker  = CircuitBreaker("Groq",  failureThreshold = 3, resetTimeoutMs = 60_000L)
+    private val geminiBreaker = CircuitBreaker("Gemini", failureThreshold = 3, resetTimeoutMs = 60_000L)
 
     /**
      * FIX #timeouts: явные таймауты как защитный слой.
@@ -145,7 +157,14 @@ class RemoteLlmEngine @Inject constructor(
         onPartial: (String) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         val sysPrompt = systemPrompt.orEmpty()
-        if (provider == "Gemini") {
+        val breaker = if (provider == "Gemini") geminiBreaker else groqBreaker
+
+        // Проверяем состояние circuit breaker до запроса
+        try { breaker.checkState() } catch (e: CircuitBreakerOpenException) {
+            return@withContext Result.failure(e)
+        }
+
+        val result = if (provider == "Gemini") {
             withRetry(shouldRetry = ::isRetryableError) {
                 generateGeminiRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
@@ -154,6 +173,15 @@ class RemoteLlmEngine @Inject constructor(
                 generateGroqRawHttp(prompt, modelName, apiKey, sysPrompt, temperature, onPartial)
             }
         }
+
+        if (result.isSuccess) breaker.recordSuccess()
+        else {
+            val ex = result.exceptionOrNull()
+            // Не засчитываем ошибки конфигурации (401, 403) в circuit breaker
+            val isConfigError = ex != null && ex !is IOException
+            if (!isConfigError) breaker.recordFailure()
+        }
+        result
     }
 
     suspend fun generateResponse(
@@ -171,17 +199,13 @@ class RemoteLlmEngine @Inject constructor(
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Gemini не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            withRetry(shouldRetry = ::isRetryableError) {
-                generateGeminiRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
-            }
+            generateResponse(prompt, provider, modelName, apiKey, systemPrompt, temperature, onPartial)
         } else {
             val apiKey = settingsRepository.groqApiKey.first()
             if (apiKey.isNullOrBlank()) return@withContext Result.failure(
                 Exception("Ключ Groq не настроен. Перейдите в Настройки → AI-провайдер.")
             )
-            withRetry(shouldRetry = ::isRetryableError) {
-                generateGroqRawHttp(prompt, modelName, apiKey, systemPrompt, temperature, onPartial)
-            }
+            generateResponse(prompt, provider, modelName, apiKey, systemPrompt, temperature, onPartial)
         }
     }
 
@@ -238,9 +262,6 @@ class RemoteLlmEngine @Inject constructor(
 
                     if (response.isSuccessful) {
                         // FIX #safety-filter: безопасный парсинг.
-                        // Gemini возвращает candidates с пустым/отсутствующим content
-                        // при срабатывании Safety Filter (finishReason == "SAFETY").
-                        // Цепочка getJSONObject() падала с JSONException.
                         val jsonResponse = JSONObject(responseBody)
                         val candidatesArr = jsonResponse.optJSONArray("candidates")
                         val candidate = candidatesArr?.optJSONObject(0)
@@ -328,9 +349,6 @@ class RemoteLlmEngine @Inject constructor(
             apiClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string() ?: ""
-                    // FIX #429-retry: Http429Exception extends IOException —
-                    // isRetryableError() перехватывает через (e is IOException).
-                    // 4xx (кроме 429) кидаются как Exception — retry не выполняется.
                     when (response.code) {
                         401  -> throw Exception("Неверный Groq API-ключ (401).")
                         429  -> throw Http429Exception("Превышен лимит Groq (429). Подождите.")
