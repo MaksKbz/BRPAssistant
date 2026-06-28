@@ -5,12 +5,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -128,6 +131,73 @@ fun OfflineModeBanner(
                     color = MaterialTheme.colorScheme.error
                 )
             }
+        }
+    }
+}
+
+/**
+ * #4 — Safety Banner.
+ *
+ * Отображается в ChatScreen когда riskLevel != "low" (диагностический режим).
+ * Цветовое кодирование:
+ *   high   → errorContainer (красный)
+ *   medium → tertiaryContainer (жёлтый/оранжевый)
+ *   иначе  → secondaryContainer (нейтральный)
+ *
+ * Если requiresEvacuation = true — выводится иконка Warning и жирный
+ * текст «Требуется эвакуация!» вместо стандартного уровня риска.
+ *
+ * @param level              Строковый уровень риска: "high", "medium", "low".
+ * @param requiresEvacuation True если ситуация требует немедленной эвакуации.
+ * @param modifier           Стандартный Modifier.
+ */
+@Composable
+fun SafetyBanner(
+    level: String,
+    requiresEvacuation: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val containerColor = when (level) {
+        "high"   -> MaterialTheme.colorScheme.errorContainer
+        "medium" -> MaterialTheme.colorScheme.tertiaryContainer
+        else     -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = when (level) {
+        "high"   -> MaterialTheme.colorScheme.onErrorContainer
+        "medium" -> MaterialTheme.colorScheme.onTertiaryContainer
+        else     -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    val icon = if (requiresEvacuation) Icons.Default.Warning else Icons.Default.Info
+    val label = when {
+        requiresEvacuation -> "⚠️ Требуется эвакуация!"
+        level == "high"    -> "Высокий уровень риска"
+        level == "medium"  -> "Средний уровень риска"
+        else               -> "Уровень риска: $level"
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (requiresEvacuation) FontWeight.Bold else FontWeight.Medium,
+                color = contentColor
+            )
         }
     }
 }

@@ -118,8 +118,6 @@ private fun ChatHistoryPanel(
                     items(items, key = { it.id }) { session ->
                         val isSelected = session.id == selectedId
                         // FIX #5: минимальный touch target 48dp (Material Design 3).
-                        // Предыдущий вертикальный padding 10dp давал ~32-34dp на xxxhdpi —
-                        // недостаточно для удобного нажатия на Android Go устройствах.
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -225,8 +223,7 @@ fun ChatScreen(
     val isTablet = widthSizeClass == WindowWidthSizeClass.Medium
 
     // FIX #7: в landscape на Compact-телефоне TopAppBar скрывается при открытой
-    // клавиатуре, чтобы освободить место для чата (актуально для экранов 20:9
-    // с высотой ~360dp в горизонтальной ориентации).
+    // клавиатуре, чтобы освободить место для чата.
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val imeVisible = WindowInsets.isImeVisible
@@ -235,7 +232,6 @@ fun ChatScreen(
     @Composable
     fun ChatContent(modifier: Modifier = Modifier) {
         Column(modifier = modifier.fillMaxSize()) {
-            // FIX #7: скрываем TopAppBar в landscape при открытой клавиатуре на Compact
             if (!hideTopBar) {
                 TopAppBar(
                     title = {
@@ -281,10 +277,12 @@ fun ChatScreen(
             }
 
             // #2 — OfflineModeBanner: показываем если провайдер выбран но ключ не задан
+            // FIX: Screen.Settings не существует в sealed class Screen.
+            // Правильный маршрут настроек API-ключа — Screen.ModelManager.
             if (hasOnlineKeyMissing && selectedOnlineProvider != null) {
                 OfflineModeBanner(
                     providerName = selectedOnlineProvider,
-                    onGoToSettings = { onNavigate(Screen.Settings.route) },
+                    onGoToSettings = { onNavigate(Screen.ModelManager.route) },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                 )
             }
@@ -334,8 +332,7 @@ fun ChatScreen(
             }
 
             // FIX: добавлен imePadding() — без него в landscape-режиме клавиатура
-            // перекрывает поле ввода на ~30% высоты экрана (особенно критично
-            // на телефонах с соотношением сторон 20:9 в горизонтальной ориентации)
+            // перекрывает поле ввода на ~30% высоты экрана.
             Box(modifier = Modifier.imePadding()) {
                 ChatInputBar(
                     value = input,

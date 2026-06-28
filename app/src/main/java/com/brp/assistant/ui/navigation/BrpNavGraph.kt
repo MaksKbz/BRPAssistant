@@ -63,9 +63,7 @@ private data class NavItem(
     val iconContent: @Composable () -> Unit
 )
 
-// FIX: явный screen= параметр во всех NavItem-вызовах —
-// без явного именованного параметра короткая записью NavItem(Screen.Home){ ... }
-// амбивалентна при возможных изменениях data class (добавление второго val).
+// FIX: явный screen= параметр во всех NavItem-вызовах.
 private val navItems = listOf(
     NavItem(screen = Screen.Home)          { Icon(Icons.Default.Home,          contentDescription = Screen.Home.label) },
     NavItem(screen = Screen.Diagnose)      { Icon(Icons.Default.Build,         contentDescription = Screen.Diagnose.label) },
@@ -93,8 +91,6 @@ fun BrpNavGraph(
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
 
     // FIX #6: 7" планшеты в portrait дают Compact (360-599dp), в landscape — Medium.
-    // Переворот менял паттерн навигации с BottomBar на Rail, вызывая дезориентацию.
-    // Если ширина >= 480dp, принудительно используем Medium независимо от WindowWidthSizeClass.
     val configuration = LocalConfiguration.current
     val effectiveSizeClass = when {
         widthSizeClass == WindowWidthSizeClass.Expanded -> WindowWidthSizeClass.Expanded
@@ -104,7 +100,6 @@ fun BrpNavGraph(
     }
 
     when {
-        // ── EXPANDED (планшеты ≥840dp): постоянный NavigationDrawer + панель сессий ───
         effectiveSizeClass == WindowWidthSizeClass.Expanded && showNav -> {
             ExpandedLayout(
                 navController       = navController,
@@ -118,7 +113,6 @@ fun BrpNavGraph(
                 widthSizeClass      = effectiveSizeClass
             )
         }
-        // ── MEDIUM (планшеты/fold ≥600dp): NavigationRail ─────────────────────
         effectiveSizeClass == WindowWidthSizeClass.Medium && showNav -> {
             Row(
                 modifier = Modifier
@@ -129,11 +123,6 @@ fun BrpNavGraph(
                     navController = navController,
                     currentRoute  = currentRoute
                 )
-                // FIX: добавлен windowInsetsPadding(WindowInsets.ime) —
-                // без него на Galaxy Fold (inner screen) и других
-                // Medium-устройствах клавиатура перекрывала поле ввода чата.
-                // safeDrawing содержит ime в Android 11+, но для
-                // старых Android добавляем явно.
                 NavHostContent(
                     navController       = navController,
                     mainViewModel       = mainViewModel,
@@ -150,12 +139,7 @@ fun BrpNavGraph(
                 )
             }
         }
-        // ── COMPACT (телефон): BottomNavigationBar ──────────────────────
         else -> {
-            // FIX: contentWindowInsets комбинирует safeDrawing + ime.
-            // Раньше только safeDrawing — инсеты от IME не проходили
-            // через Scaffold, что вызывало перекрытие поля ввода на
-            // бюджетных Android 9/10 с нестандартным отображением клавиатуры.
             Scaffold(
                 contentWindowInsets = WindowInsets.safeDrawing.union(WindowInsets.ime),
                 bottomBar = {
@@ -196,20 +180,6 @@ fun BrpNavGraph(
     }
 }
 
-/**
- * FIX #7: постоянный NavigationDrawer + панель сессий для Expanded.
- * FIX #2: chatVm передаётся извне (из NavHostContent через параметр),
- *         чтобы гарантировать единственный экземпляр ChatViewModel
- *         для панели сессий в drawer и основного чата.
- *
- * Макет при widthSizeClass.Expanded:
- *
- *  ┌────────────────┬──────────────────┬────────────────────────────────┐
- *  │ NavDrawer      │ Панель сессий    │     Основной контент           │
- *  │  240dp         │  280dp           │     (weight 1f)                │
- *  │                │  (только chat/)  │                                │
- *  └────────────────┴──────────────────┴────────────────────────────────┘
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExpandedLayout(
@@ -231,13 +201,11 @@ private fun ExpandedLayout(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
-        // ── Постоянный дравер 240dp ──────────────────────────────────────
         PermanentDrawerSheet(
             modifier = Modifier
                 .width(240.dp)
                 .fillMaxHeight()
         ) {
-            // Шапка дравера
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -261,7 +229,6 @@ private fun ExpandedLayout(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
 
-            // Навигационные пункты
             navItems.forEach { item ->
                 val selected = currentRoute?.startsWith(item.screen.route) == true
                 NavigationDrawerItem(
@@ -281,7 +248,6 @@ private fun ExpandedLayout(
 
             Spacer(Modifier.weight(1f))
 
-            // Footer: техника + модель
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Column(
                 modifier = Modifier
@@ -328,7 +294,6 @@ private fun ExpandedLayout(
             }
         }
 
-        // ── Панель сессий 280dp — только в chat/-маршруте ─────────────────
         if (isChatRoute && chatState != null) {
             val vm = SharedChatVmHolder.chatVm
             Surface(
@@ -342,7 +307,6 @@ private fun ExpandedLayout(
                         .fillMaxSize()
                         .padding(8.dp)
                 ) {
-                    // Кнопка "Новый чат"
                     OutlinedButton(
                         onClick  = { vm?.startNewChat(selectedVehicleId, selectedVehicleName, "both") },
                         modifier = Modifier.fillMaxWidth()
@@ -412,7 +376,6 @@ private fun ExpandedLayout(
             }
         }
 
-        // ── Основной контент ──────────────────────────────────────────
         NavHostContent(
             navController       = navController,
             mainViewModel       = mainViewModel,
@@ -421,9 +384,6 @@ private fun ExpandedLayout(
             selectedVehicle     = selectedVehicle,
             activeModelName     = activeModelName,
             currentTheme        = currentTheme,
-            // FIX #1: при Expanded передаём Medium в NavHostContent → ChatScreen,
-            // чтобы внутренняя ChatHistoryPanel (isTablet = Medium) не рендерилась
-            // повторно — панель уже есть в ExpandedLayout выше (560dp дублирования устранено).
             widthSizeClass      = WindowWidthSizeClass.Medium,
             modifier            = Modifier.weight(1f).fillMaxHeight()
         )
@@ -433,12 +393,6 @@ private fun ExpandedLayout(
 /**
  * FIX #2: синглтон-холдер для передачи единственного экземпляра ChatViewModel
  * между ExpandedLayout и NavHostContent без activityViewModel().
- *
- * ChatViewModel создаётся в composable(Screen.Chat.route) через hiltViewModel()
- * (правильный ViewModelStoreOwner — NavBackStackEntry) и сохраняется здесь.
- * ExpandedLayout читает его через SharedChatVmHolder.chatVm.
- *
- * Очищается при выходе из chat/-маршрута (DisposableEffect в NavHostContent).
  */
 object SharedChatVmHolder {
     var chatVm: ChatViewModel? = null
@@ -573,9 +527,7 @@ private fun NavHostContent(
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
 
-            // FIX #2: регистрируем единственный экземпляр ChatViewModel в холдере,
-            // чтобы ExpandedLayout мог его читать без создания второго экземпляра.
-            // DisposableEffect очищает ссылку при выходе из chat/-маршрута.
+            // FIX #2: регистрируем единственный экземпляр ChatViewModel в холдере.
             DisposableEffect(chatVm) {
                 SharedChatVmHolder.chatVm = chatVm
                 onDispose { SharedChatVmHolder.chatVm = null }
@@ -603,6 +555,8 @@ private fun NavHostContent(
                 currentOnlineProvider  = state.currentOnlineProvider,
                 selectedLlmModelId     = state.selectedLlmModelId,
                 selectedOnlineProvider = state.selectedOnlineProvider,
+                // #2 — передаём флаг отсутствия ключа из ViewModel
+                hasOnlineKeyMissing    = state.hasOnlineKeyMissing,
                 onSelectOfflineLlm     = { chatVm.selectOfflineLlm(it) },
                 onSelectOnlineLlm      = { chatVm.selectOnlineLlm(it) },
                 onResetLlm             = { chatVm.resetLlmSelection() },

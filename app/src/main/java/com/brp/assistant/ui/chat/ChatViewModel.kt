@@ -58,7 +58,14 @@ data class ChatState(
     val activeOfflineModelId: String? = null,
     val currentOnlineProvider: String = "Gemini",
     val sessionHistory: List<ChatSessionSummary> = emptyList(),
-    val selectedSessionId: String? = null
+    val selectedSessionId: String? = null,
+    /**
+     * #2 — true когда активен онлайн-провайдер (нет активной офлайн-модели
+     * и не выбрана явно офлайн-модель), но API-ключ для этого провайдера
+     * не задан в настройках. Вычисляется в init{} из combine-потока.
+     * При true ChatScreen показывает OfflineModeBanner.
+     */
+    val hasOnlineKeyMissing: Boolean = false
 )
 
 @HiltViewModel
@@ -84,6 +91,7 @@ class ChatViewModel @Inject constructor(
     private var generationJob: Job? = null
 
     init {
+        // isModelReady: офлайн-модель активна ИЛИ ключ нужного провайдера задан
         viewModelScope.launch {
             combine(
                 llmEngine.activeModelId,
@@ -101,6 +109,7 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        // allOfflineModels + activeOfflineModelId
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 val items = PublicOfflineModelCatalog.models.map { model ->
@@ -118,12 +127,14 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        // currentOnlineProvider
         viewModelScope.launch {
             settingsRepository.aiProvider.collect { p ->
                 _state.update { it.copy(currentOnlineProvider = p ?: "Gemini") }
             }
         }
 
+        // sessionHistory
         viewModelScope.launch {
             chatSessionDao.observeAllSessions().collect { entities ->
                 val summaries = entities.map { entity ->
@@ -136,6 +147,36 @@ class ChatViewModel @Inject constructor(
                     )
                 }
                 _state.update { it.copy(sessionHistory = summaries) }
+            }
+        }
+
+        /**
+         * #2 — hasOnlineKeyMissing:
+         * Флаг true когда:
+         *   1. Не выбрана явно офлайн-модель (selectedLlmModelId == null)
+         *   2. Нет активной офлайн-модели в движке (activeOfflineModelId == null)
+         *   3. Для эффективного провайдера (selectedOnlineProvider ?: defaultProvider)
+         *      не задан API-ключ.
+         *
+         * Используем flatMapLatest на _state, чтобы реагировать и на смену
+         * selectedOnlineProvider внутри сессии (пользователь переключил провайдер
+         * в LlmSelectorSheet без выхода с экрана).
+         */
+        viewModelScope.launch {
+            combine(
+                settingsRepository.aiProvider,
+                settingsRepository.geminiApiKey,
+                settingsRepository.groqApiKey,
+                llmEngine.activeModelId,
+                _state.map { it.selectedLlmModelId to it.selectedOnlineProvider }
+            ) { defaultProvider, geminiKey, groqKey, activeOfflineId, (selectedOfflineId, selectedOnline) ->
+                // Если активна офлайн-модель или явно выбрана офлайн — ключ не нужен
+                if (activeOfflineId != null || selectedOfflineId != null) return@combine false
+                val effectiveProvider = selectedOnline ?: defaultProvider ?: "Gemini"
+                if (effectiveProvider == "Gemini") geminiKey.isNullOrBlank()
+                else groqKey.isNullOrBlank()
+            }.collect { missing ->
+                _state.update { it.copy(hasOnlineKeyMissing = missing) }
             }
         }
     }
@@ -354,7 +395,7 @@ class ChatViewModel @Inject constructor(
         lastTwo.forEach { msg ->
             chatSessionDao.insertMessage(
                 ChatMessageEntity(
-                    id        = msg.id,   // стабильный id из ChatMessage
+                    id        = msg.id,
                     sessionId = sessionId,
                     role      = if (msg.role == MessageRole.USER) "user" else "assistant",
                     content   = msg.content,
