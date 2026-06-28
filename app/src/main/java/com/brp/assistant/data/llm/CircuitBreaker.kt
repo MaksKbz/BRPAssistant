@@ -3,107 +3,106 @@ package com.brp.assistant.data.llm
 import android.util.Log
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
- * #3 — Circuit Breaker для remote LLM провайдеров.
+ * E3 — Circuit Breaker для LLM-провайдеров.
  *
- * Состояния:
- *  CLOSED  — нормальная работа, запросы проходят.
- *  OPEN    — после [FAILURE_THRESHOLD] подряд ошибок; запросы отклоняются
- *            немедленно без обращения к сети на [RESET_TIMEOUT_MS] мс.
- *  HALF_OPEN — после таймаута; один пробный запрос разрешён:
- *              успех → CLOSED, ошибка → OPEN снова.
+ * После [failureThreshold] подряд идущих ошибок переходит в состояние OPEN
+ * и блокирует все вызовы на [resetTimeoutMs] миллисекунд.
+ * По истечении таймаута переходит в HALF_OPEN: пропускает один пробный запрос.
+ * Если он успешен — переходит в CLOSED; если нет — снова OPEN.
  *
- * Почему не просто withRetry:
- *  withRetry повторяет ошибочные запросы и добавляет задержку.
- *  CircuitBreaker останавливает поток запросов целиком, когда провайдер
- *  явно недоступен — не тратит батарею и лимиты API на безнадёжные попытки.
+ * Использование:
+ * ```kotlin
+ * val result = circuitBreaker.call(providerKey) {
+ *     provider.complete(prompt)
+ * }
+ * ```
  *
- * Ключи circuit-breaker'ов хранятся по provider-name ("Gemini", "Groq").
+ * @param failureThreshold  Кол-во последовательных ошибок для открытия цепи. Default: 3.
+ * @param resetTimeoutMs    Пауза в OPEN-состоянии перед пробным запросом. Default: 30 000 мс.
  */
-@Singleton
-class CircuitBreaker @Inject constructor() {
+class CircuitBreaker(
+    private val failureThreshold: Int = 3,
+    private val resetTimeoutMs: Long = 30_000L
+) {
+    private enum class State { CLOSED, OPEN, HALF_OPEN }
 
     private data class BreakerState(
-        val failures: Int = 0,
         val state: State = State.CLOSED,
+        val failures: Int = 0,
         val openedAt: Long = 0L
     )
 
-    private enum class State { CLOSED, OPEN, HALF_OPEN }
-
+    // Отдельный счётчик на каждый ключ провайдера
+    private val states = mutableMapOf<String, BreakerState>()
     private val mutex = Mutex()
-    private val breakers = mutableMapOf<String, BreakerState>()
 
     /**
-     * Возвращает true если провайдер заблокирован (OPEN-состояние).
-     * В HALF_OPEN пропускает один запрос.
+     * Выполняет [block] с защитой Circuit Breaker.
+     *
+     * @param key  Идентификатор провайдера (например: "openai", "anthropic").
+     * @throws CircuitOpenException если цепь открыта и таймаут не истёк.
      */
-    suspend fun isOpen(provider: String): Boolean = mutex.withLock {
-        val s = breakers[provider] ?: return@withLock false
-        when (s.state) {
-            State.CLOSED -> false
-            State.OPEN -> {
-                val elapsed = System.currentTimeMillis() - s.openedAt
-                if (elapsed >= RESET_TIMEOUT_MS) {
-                    // Переходим в HALF_OPEN — даём один шанс
-                    breakers[provider] = s.copy(state = State.HALF_OPEN)
-                    Log.d(TAG, "[$provider] OPEN → HALF_OPEN after ${elapsed}ms")
-                    false // пропускаем запрос
+    suspend fun <T> call(key: String, block: suspend () -> T): T {
+        mutex.withLock {
+            val s = states.getOrDefault(key, BreakerState())
+            when (s.state) {
+                State.OPEN -> {
+                    val elapsed = System.currentTimeMillis() - s.openedAt
+                    if (elapsed < resetTimeoutMs) {
+                        val remaining = (resetTimeoutMs - elapsed) / 1000
+                        throw CircuitOpenException(
+                            "Circuit OPEN for '$key'. Retry in ~${remaining}s."
+                        )
+                    } else {
+                        // Таймаут истёк — пробуем один запрос
+                        states[key] = s.copy(state = State.HALF_OPEN)
+                        Log.i(TAG, "Circuit HALF_OPEN for '$key'")
+                    }
+                }
+                State.CLOSED, State.HALF_OPEN -> Unit // продолжаем
+            }
+        }
+
+        return try {
+            val result = block()
+            mutex.withLock {
+                // Успех — сбрасываем счётчик
+                states[key] = BreakerState(state = State.CLOSED)
+                Log.d(TAG, "Circuit CLOSED for '$key' (success)")
+            }
+            result
+        } catch (e: Exception) {
+            mutex.withLock {
+                val s = states.getOrDefault(key, BreakerState())
+                val newFailures = s.failures + 1
+                if (newFailures >= failureThreshold || s.state == State.HALF_OPEN) {
+                    states[key] = BreakerState(
+                        state = State.OPEN,
+                        failures = newFailures,
+                        openedAt = System.currentTimeMillis()
+                    )
+                    Log.w(TAG, "Circuit OPEN for '$key' after $newFailures failures")
                 } else {
-                    Log.d(TAG, "[$provider] OPEN, blocking. ${RESET_TIMEOUT_MS - elapsed}ms to reset")
-                    true
+                    states[key] = s.copy(failures = newFailures)
                 }
             }
-            State.HALF_OPEN -> false // один пробный запрос
+            throw e
         }
     }
 
-    /**
-     * Вызывается после успешного запроса — сбрасывает счётчик ошибок.
-     */
-    suspend fun recordSuccess(provider: String) = mutex.withLock {
-        val prev = breakers[provider]
-        if (prev != null && prev.state != State.CLOSED) {
-            Log.i(TAG, "[$provider] → CLOSED (success)")
-        }
-        breakers[provider] = BreakerState()
-    }
+    /** Принудительный сброс состояния для [key] (удобно в тестах). */
+    suspend fun reset(key: String) = mutex.withLock { states.remove(key) }
 
-    /**
-     * Вызывается после ошибки — инкрементирует счётчик.
-     * При достижении [FAILURE_THRESHOLD] переходит в OPEN.
-     */
-    suspend fun recordFailure(provider: String) = mutex.withLock {
-        val s = breakers.getOrDefault(provider, BreakerState())
-        val newFailures = s.failures + 1
-        val newState = if (newFailures >= FAILURE_THRESHOLD) {
-            Log.w(TAG, "[$provider] → OPEN after $newFailures failures")
-            State.OPEN
-        } else {
-            Log.d(TAG, "[$provider] failure $newFailures/$FAILURE_THRESHOLD")
-            State.CLOSED
-        }
-        breakers[provider] = BreakerState(
-            failures = newFailures,
-            state = newState,
-            openedAt = if (newState == State.OPEN) System.currentTimeMillis() else s.openedAt
-        )
-    }
-
-    /** Принудительный сброс конкретного провайдера (например, после смены ключа). */
-    suspend fun reset(provider: String) = mutex.withLock {
-        breakers.remove(provider)
-        Log.i(TAG, "[$provider] manually reset")
-    }
+    /** Текущее кол-во последовательных ошибок для [key]. */
+    suspend fun failureCount(key: String): Int =
+        mutex.withLock { states[key]?.failures ?: 0 }
 
     companion object {
         private const val TAG = "CircuitBreaker"
-        /** Число подряд идущих ошибок для открытия circuit. */
-        const val FAILURE_THRESHOLD = 3
-        /** Время блокировки провайдера после открытия circuit (30 с). */
-        const val RESET_TIMEOUT_MS = 30_000L
     }
 }
+
+/** Исключение, бросаемое когда Circuit Breaker находится в состоянии OPEN. */
+class CircuitOpenException(message: String) : Exception(message)
