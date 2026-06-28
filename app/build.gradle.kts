@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -39,9 +41,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // Kotlin 2.3 убрал DSL kotlinOptions { jvmTarget = "17" } (String).
+    // jvmTarget настраивается через compilerOptions (см. блок kotlin {} ниже).
     buildFeatures {
         compose = true
         buildConfig = true
@@ -54,6 +55,13 @@ android {
             // LiteRT-LM .so библиотеки требуют legacy packaging
             useLegacyPackaging = true
         }
+    }
+}
+
+// Kotlin 2.3: новый DSL для jvmTarget (взамен удалённого kotlinOptions).
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
