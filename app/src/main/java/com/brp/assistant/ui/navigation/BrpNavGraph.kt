@@ -206,7 +206,7 @@ private fun ExpandedLayout(
     currentRoute: String?,
     selectedVehicleId: String?,
     selectedVehicleName: String?,
-    selectedVehicle: Any?,
+    selectedVehicle: BrpModel?,
     activeModelName: String?,
     currentTheme: String,
     widthSizeClass: WindowWidthSizeClass
@@ -484,7 +484,7 @@ private fun NavHostContent(
     mainViewModel: MainViewModel,
     selectedVehicleId: String?,
     selectedVehicleName: String?,
-    selectedVehicle: Any?,
+    selectedVehicle: BrpModel?,
     activeModelName: String?,
     currentTheme: String,
     healthWarning: String?,
