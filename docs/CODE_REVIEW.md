@@ -206,3 +206,18 @@ tables: ... (НЕТ chat_sessions / chat_messages)
 
 **Вывод:** путь к зелёному CI требует исправления всех ~55 ошибок. ~40 — механика/умеренные, ~15 (DiagnoseScreen) — требуют решения по дизайну.
 
+## ✅ РЕЗУЛЬТАТ — сборка ЗЕЛЁНАЯ
+
+После итеративной работы через CI **все блокеры устранены**. Ветка `fix/litertlm-0.13.1` собирает Debug APK успешно (run `28337542596`, артефакт `BRPAssistant-v2.4.0-debug`, 46.8 МБ).
+
+**Итоговая матрица тулчейна** (единственное рабочее пересечение для litertlm + AGP 8):
+- Kotlin **2.3.0** (litertlm 0.9.0+ скомпилированы metadata 2.3.0)
+- KSP **2.3.0** (новая унифицированная нумерация)
+- Hilt **2.58** — последняя версия с поддержкой AGP 8.x **и** фиксом `kotlin-metadata-jvm` для чтения Kotlin 2.3.0 metadata (dagger#5001). 2.59+/2.60 требуют AGP 9.
+- litertlm-android **0.13.1** (была несуществующая 0.1.1)
+- security-crypto **1.1.0-alpha06** (MasterKey удалён в stable 1.0.0)
+- `jvmTarget` переведён на `compilerOptions` DSL (Kotlin 2.3 убрал `kotlinOptions`)
+
+**Все ~55 ошибок компиляции исходников починены** (дрейф CircuitBreaker/HealthStatus/MediaPipe/PromptStyle/FaultCard/DiagnoseScreen, visibility-проверки Kotlin 2.3, и т.д.). LiteRtLmEngine переписан под реальный API LiteRT-LM 0.13.1.
+
+
