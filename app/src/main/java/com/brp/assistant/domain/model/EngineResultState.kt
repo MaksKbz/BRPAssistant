@@ -38,8 +38,10 @@ sealed class EngineResultState<out T> {
         val availMb: Long = 0L
     ) : EngineResultState<Nothing>() {
         val message: String get() =
-            "Недостаточно памяти (исп. ${usedMb} МБ, доступ. ${availMb} МБ). " +
+            "Недостаточно памяти (исп. ${usedMb} МБ, доступ. ${availMb} МБ). " +
             "Попробуйте переключиться на модель поменьше или освободить RAM."
+
+        companion object
     }
 }
 

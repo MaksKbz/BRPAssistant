@@ -18,7 +18,6 @@ import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.domain.model.ChatMessage
 import com.brp.assistant.domain.model.EngineResultState
 import com.brp.assistant.domain.model.FaultCard
-import com.brp.assistant.domain.model.FaultSeverity
 import com.brp.assistant.ui.components.ChatInputBar
 import com.brp.assistant.ui.components.SafetyBanner
 import com.brp.assistant.ui.components.SectionHeader
@@ -67,7 +66,7 @@ fun DiagnoseScreen(
             dismissButton = {
                 TextButton(onClick = {
                     showOomDialog = false
-                    onNavigate(Screen.ModelPicker.route)
+                    onNavigate(Screen.ModelManager.route)
                 }) { Text("Выбрать модель") }
             }
         )
@@ -175,7 +174,7 @@ fun DiagnoseScreen(
                                 color = MaterialTheme.colorScheme.onTertiaryContainer
                             )
                         }
-                        TextButton(onClick = { onNavigate(Screen.ModelPicker.route) }) {
+                        TextButton(onClick = { onNavigate(Screen.ModelManager.route) }) {
                             Text("Сменить")
                         }
                     }
@@ -306,11 +305,11 @@ private fun FaultCardItem(
     onSend: (String) -> Unit
 ) {
     val severityColor = when (card.severity) {
-        FaultSeverity.CRITICAL -> MaterialTheme.colorScheme.error
-        FaultSeverity.HIGH     -> Color(0xFFFF6D00)  // deep orange
-        FaultSeverity.MEDIUM   -> Color(0xFFFFC107)  // amber
-        FaultSeverity.LOW      -> MaterialTheme.colorScheme.primary
-        FaultSeverity.INFO     -> MaterialTheme.colorScheme.outline
+        FaultCard.Severity.CRITICAL -> MaterialTheme.colorScheme.error
+        FaultCard.Severity.HIGH     -> Color(0xFFFF6D00)  // deep orange
+        FaultCard.Severity.MEDIUM   -> Color(0xFFFFC107)  // amber
+        FaultCard.Severity.LOW      -> MaterialTheme.colorScheme.primary
+        FaultCard.Severity.UNKNOWN  -> MaterialTheme.colorScheme.outline
     }
 
     Card(
@@ -318,7 +317,7 @@ private fun FaultCardItem(
         shape    = RoundedCornerShape(12.dp),
         colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        onClick   = { onSend(card.symptomQuery) }
+        onClick   = { onSend(card.chatQuery) }
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -333,13 +332,13 @@ private fun FaultCardItem(
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    card.title,
+                    card.symptom,
                     style      = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
-                if (card.shortDescription.isNotBlank()) {
+                if (card.description.isNotBlank()) {
                     Text(
-                        card.shortDescription,
+                        card.description,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2

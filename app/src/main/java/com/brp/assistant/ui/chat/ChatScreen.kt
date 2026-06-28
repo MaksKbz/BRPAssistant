@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.brp.assistant.ui.chat
 
 import android.content.res.Configuration

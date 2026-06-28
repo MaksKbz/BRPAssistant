@@ -27,6 +27,7 @@ enum class ModelFormat {
 @Serializable
 enum class PromptStyle {
     CHATML,
+    QWEN3,
     PHI3,
     GEMMA
 }

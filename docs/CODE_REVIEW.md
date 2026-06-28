@@ -166,3 +166,43 @@ tables: ... (НЕТ chat_sessions / chat_messages)
 ---
 
 *Отчёт сгенерирован агентом Arena.ai по результатам статического анализа репозитория.*
+
+---
+
+# Addendum 2026-06-29 — статус работ и новое критическое открытие
+
+## Что уже починено и закоммичено
+
+**В `main` (коммит `ef3987b`)** — C1–C4:
+- ✅ C1: `enteties`→`entities` в 17 файлах
+- ✅ C2: убраны дубль-провайдеры БД/DAO из `AppModule.kt`
+- ✅ C3: `DatabaseModule.provideDatabase` переписан на `Room.databaseBuilder` (без `getInstance`)
+- ✅ C4: asset-БД приведена к схеме v6 + `build_database.py` выставляет `PRAGMA user_version`
+
+**В ветке `fix/litertlm-0.13.1`** — C5 + тулчейн:
+- ✅ litertlm `0.1.1` (несуществующая) → `0.13.1`; `LiteRtLmEngine.kt` переписан под реальный API (`Engine()`+`initialize()`, `sendMessageAsync`, `ConversationConfig`)
+- ✅ Kotlin `2.1.10`→`2.3.0` (litertlm 0.9.0+ скомпилированы metadata 2.3.0), KSP→`2.3.0`, миграция `jvmTarget` на `compilerOptions` DSL
+- ✅ Hilt `2.53.1`→`2.56.2` (поддержка KSP2, AGP 8.x-совместима)
+- ✅ Сборка теперь проходит `checkDebugAarMetadata` и доходит до `compileDebugKotlin`
+
+## ⛔ НОВОЕ: кодовая база никогда не компилировалась — ~55 ошибок
+
+После того как блокеры зависимостей/тулчейна сняты, до компиляции исходников выяснилось: **проект содержит ~55 ошибок компиляции**, накопленных от незавершённых рефакторингов. Они были скрыты тем, что с коммита `335d634` (добавление litertlm) сборка падала на `checkDebugAarMetadata`, не доходя до `compileDebugKotlin`.
+
+Природа — **дрейф двух «поколений» API**, не сведённых вместе:
+
+| Категория | Примеры | Объём | Тип фикса |
+|---|---|---|---|
+| Дрейф CircuitBreaker | `RemoteLlmEngine` зовёт `isOpen/recordSuccess/recordFailure`, а класс даёт только `call(key){}` | ~9 | Умеренный (рефактор RemoteLlmEngine под `call{}`) |
+| HealthStatus | ViewModel'и зовут `isLowDisk/isDbError`, которых нет (есть `dbOk/diskFreeGb`) | ~4 | Механический (computed-свойства) |
+| AppHealthChecker DI | провайдер передаёт `(context, db)`, а нужно `(context, ChatSessionDao, SettingsRepository)` | ~2 | Механический |
+| security-crypto 1.0.0 | `MasterKey` удалён в stable 1.0.0 | ~4 | Откат на `1.1.0-alpha06` |
+| MediaPipe | `setPreferredBackend/Backend` нет в `tasks-genai:0.10.14` | ~2 | Механический |
+| PromptStyle enum | вызов `QWEN3`, в enum `CHATML/PHI3/GEMMA` | ~4 | Механический |
+| Мелкий дрейф моделей | `MessageRole.isUser/.text`, `ModelRepository.getAll`, `DeviceCapabilityProvider.isSafeForLocalLlm`, `EngineResultState.Companion`, `Result<Boolean>` как `Boolean` | ~8 | Механический |
+| DiagnoseScreen | ссылки на **несуществующие** `FaultSeverity`/`SectionHeader`/`ModelPicker` | ~15 | **Проектное решение** (реализовать компоненты или упростить экран) |
+| BrpNavGraph | типы `Any?` vs `BrpModel?`, нет `updateProvider/updateModel` | ~7 | Умеренный |
+| Kotlin 2.3 stricter | visibility (`CircuitBreaker:96`), experimental API (`ChatScreen:359`) | ~2 | Механический |
+
+**Вывод:** путь к зелёному CI требует исправления всех ~55 ошибок. ~40 — механика/умеренные, ~15 (DiagnoseScreen) — требуют решения по дизайну.
+

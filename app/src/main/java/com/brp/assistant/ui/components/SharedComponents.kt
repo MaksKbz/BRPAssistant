@@ -201,3 +201,20 @@ fun SafetyBanner(
         }
     }
 }
+
+/**
+ * Простой заголовок секции внутри LazyColumn.
+ */
+@Composable
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = title,
+        modifier = modifier.padding(top = 8.dp, bottom = 4.dp),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}

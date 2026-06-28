@@ -1,6 +1,7 @@
 package com.brp.assistant.domain.usecase
 
 import com.brp.assistant.domain.model.ChatMessage
+import com.brp.assistant.domain.model.MessageRole
 import javax.inject.Inject
 
 /**
@@ -47,8 +48,8 @@ class ConversationSummaryUseCase @Inject constructor() {
         fallback: String = DEFAULT_FALLBACK
     ): String {
         val firstUserText = messages
-            .firstOrNull { it.isUser }
-            ?.text
+            .firstOrNull { it.role == MessageRole.USER }
+            ?.content
             ?.trim()
             ?.replace(Regex("[\\r\\n\\t]+"), " ")   // убираем переносы строк
             ?.replace(Regex(" {2,}"), " ")           // схлопываем двойные пробелы

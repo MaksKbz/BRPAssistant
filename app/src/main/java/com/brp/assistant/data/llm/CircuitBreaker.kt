@@ -92,12 +92,58 @@ class CircuitBreaker(
         }
     }
 
-    /** Принудительный сброс состояния для [key] (удобно в тестах). */
-    suspend fun reset(key: String) = mutex.withLock { states.remove(key) }
+    /** Принудительный сброс состояния для [key] (удобно в тестах и после успеха). */
+    suspend fun reset(key: String) {
+        mutex.withLock { states.remove(key) }
+    }
 
     /** Текущее кол-во последовательных ошибок для [key]. */
     suspend fun failureCount(key: String): Int =
         mutex.withLock { states[key]?.failures ?: 0 }
+
+    /**
+     * Открыта ли цепь для [key] (OPEN и таймаут не истёк).
+     * Если таймаут истёк — переводит в HALF_OPEN и возвращает false (пропускает пробный запрос).
+     */
+    suspend fun isOpen(key: String): Boolean = mutex.withLock {
+        val s = states[key] ?: return@withLock false
+        when (s.state) {
+            State.OPEN -> {
+                val elapsed = System.currentTimeMillis() - s.openedAt
+                if (elapsed < resetTimeoutMs) {
+                    true
+                } else {
+                    states[key] = s.copy(state = State.HALF_OPEN)
+                    Log.i(TAG, "Circuit HALF_OPEN for '$key'")
+                    false
+                }
+            }
+            State.HALF_OPEN, State.CLOSED -> false
+        }
+    }
+
+    /** Регистрирует успех: сбрасывает счётчик ошибок и закрывает цепь. */
+    suspend fun recordSuccess(key: String) {
+        mutex.withLock {
+            states[key] = BreakerState(state = State.CLOSED)
+            Log.d(TAG, "Circuit CLOSED for '$key' (recordSuccess)")
+        }
+    }
+
+    /** Регистрирует сбой: инкремент счётчика, при достижении порога — OPEN. */
+    suspend fun recordFailure(key: String) {
+        mutex.withLock {
+            val s = states.getOrDefault(key, BreakerState())
+            val newFailures = s.failures + 1
+            states[key] = if (newFailures >= failureThreshold || s.state == State.HALF_OPEN) {
+                BreakerState(State.OPEN, newFailures, System.currentTimeMillis()).also {
+                    Log.w(TAG, "Circuit OPEN for '$key' after $newFailures failures")
+                }
+            } else {
+                s.copy(failures = newFailures)
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "CircuitBreaker"
