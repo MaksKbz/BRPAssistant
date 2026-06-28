@@ -35,7 +35,46 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions")
     suspend fun deleteAllSessions()
 
-    // ── Сообщения ───────────────────────────────────────────────────────────────────────
+    // ── #6 Поиск и пагинация ──────────────────────────────────────────────────────────────
+
+    /**
+     * #6 — Полнотекстовый поиск по title и vehicleName сессий.
+     *
+     * LIKE '%query%' достаточно для текущего объёма данных (сотни сессий).
+     * При росте до тысяч записей стоит добавить FTS4/FTS5 виртуальную таблицу.
+     *
+     * Результат отсортирован по updatedAt DESC — последние изменённые сверху.
+     */
+    @Query(
+        "SELECT * FROM chat_sessions " +
+        "WHERE title LIKE '%' || :query || '%' " +
+        "   OR vehicleName LIKE '%' || :query || '%' " +
+        "ORDER BY updatedAt DESC"
+    )
+    suspend fun searchSessions(query: String): List<ChatSessionEntity>
+
+    /**
+     * #6 — Курсорная пагинация сессий по updatedAt DESC.
+     *
+     * @param limit  Размер страницы (рекомендуется 20–50).
+     * @param offset Смещение (страница × limit).
+     *
+     * Использование:
+     *   page 0 → offset = 0
+     *   page 1 → offset = limit
+     *   page N → offset = N * limit
+     *
+     * В следующем PR будет обёрнут в PagingSource (Paging 3), если
+     * число сессий превысит 200 (эмпирический порог для LazyColumn).
+     */
+    @Query(
+        "SELECT * FROM chat_sessions " +
+        "ORDER BY updatedAt DESC " +
+        "LIMIT :limit OFFSET :offset"
+    )
+    suspend fun getSessionsPaged(limit: Int, offset: Int): List<ChatSessionEntity>
+
+    // ── Сообщения ───────────────────────────────────────────────────────────
 
     /** Все сообщения сессии в хронологическом порядке. */
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
@@ -43,7 +82,7 @@ interface ChatSessionDao {
 
     /**
      * Bulk-insert с REPLACE — идемпотенен при повторных вызовах.
-     * Оставлен для обратной совместимости и полной перезаписи в легаци-сценариях.
+     * Оставлен для обратной совместимости и полной перезаписи в легаси-сценариях.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)

@@ -3,6 +3,7 @@ package com.brp.assistant
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.brp.assistant.domain.AppHealthChecker
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -14,6 +15,19 @@ class App : Application(), Configuration.Provider {
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
+
+    /**
+     * #5 — Health Check инжектируется и запускается при старте.
+     * Результат доступен через AppHealthChecker.status (StateFlow);
+     * ChatViewModel и SettingsViewModel могут подписаться на него.
+     */
+    @Inject
+    lateinit var healthChecker: AppHealthChecker
+
+    override fun onCreate() {
+        super.onCreate()
+        healthChecker.runChecks()
+    }
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()

@@ -1,160 +1,133 @@
 package com.brp.assistant.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 
-// ============================================================
-// ACTION CARD — кнопка на главном экране
-// ============================================================
-@Composable
-fun ActionCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    accentColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        onClick = onClick,
-        modifier = modifier.height(130.dp),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(18.dp).fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(60.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(accentColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, null, modifier = Modifier.size(32.dp), tint = accentColor)
-            }
-            Spacer(modifier = Modifier.width(18.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-// ============================================================
-// SAFETY BANNER
-// ============================================================
-@Composable
-fun SafetyBanner(
-    level: String,
-    requiresEvacuation: Boolean = false,
-    modifier: Modifier = Modifier
-) {
-    val (color, icon, text) = when (level) {
-        "critical" -> Triple(
-            androidx.compose.ui.graphics.Color(0xFFD32F2F),
-            Icons.Default.Warning,
-            if (requiresEvacuation) "🚨 ЭВАКУАЦИЯ — обратитесь к дилеру!" else "⛔ КРИТИЧЕСКИЙ РИСК — действуйте с крайней осторожностью"
-        )
-        "high" -> Triple(
-            androidx.compose.ui.graphics.Color(0xFFF57C00),
-            Icons.Default.Warning,
-            "⚠️ Высокий риск — следуйте инструкциям точно"
-        )
-        "medium" -> Triple(
-            androidx.compose.ui.graphics.Color(0xFFFBC02D),
-            Icons.Default.Build,
-            "⚠️ Умеренный риск — необходима осторожность"
-        )
-        else -> return
-    }
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = color.copy(alpha = 0.12f),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(icon, null, tint = color, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(text, style = MaterialTheme.typography.labelLarge, color = color, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-// ============================================================
-// CHAT INPUT BAR
-// ============================================================
+/**
+ * Поле ввода сообщения с кнопкой отправки.
+ * Используется в ChatScreen и DiagnosticScreen.
+ */
 @Composable
 fun ChatInputBar(
     value: String,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
-    enabled: Boolean = true,
-    placeholder: String = "Задайте вопрос…"
+    enabled: Boolean,
+    placeholder: String = "Введите сообщение…",
+    modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shadowElevation = 8.dp
+        modifier = modifier.fillMaxWidth(),
+        tonalElevation = 3.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .navigationBarsPadding(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(placeholder) },
-                maxLines = 4,
+                placeholder = { Text(placeholder, style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(24.dp),
+                maxLines = 4,
                 enabled = enabled,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Send
+                ),
+                keyboardActions = KeyboardActions(onSend = { if (value.isNotBlank() && enabled) onSend() }),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 )
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(Modifier.width(8.dp))
             FilledIconButton(
                 onClick = onSend,
                 enabled = enabled && value.isNotBlank(),
-                modifier = Modifier.size(48.dp),
-                shape = CircleShape
+                modifier = Modifier.size(48.dp)
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, "Отправить")
+                Icon(Icons.Default.Send, contentDescription = "Отправить")
             }
         }
     }
 }
 
-// ============================================================
-// SECTION HEADER
-// ============================================================
+/**
+ * #2 — Offline Mode Banner.
+ *
+ * Показывается в ChatScreen когда выбран онлайн-провайдер,
+ * но API-ключ не настроен — приложение упадёт в ошибку при отправке.
+ *
+ * Дизайн: предупреждающий Card с иконкой WifiOff и ссылкой на настройки.
+ * Не блокирует UI — пользователь может закрыть или перейти в настройки.
+ *
+ * @param providerName  Название провайдера («Gemini» / «Groq»).
+ * @param onGoToSettings Переход в экран настроек AI-провайдера.
+ * @param modifier      Стандартный Modifier.
+ */
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier) {
-    Text(
-        title,
-        modifier = modifier.padding(start = 4.dp, top = 16.dp, bottom = 6.dp),
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold
-    )
+fun OfflineModeBanner(
+    providerName: String,
+    onGoToSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.WifiOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Ключ $providerName не настроен",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Text(
+                    text = "Онлайн-запросы будут завершаться ошибкой.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                )
+            }
+            TextButton(
+                onClick = onGoToSettings,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "Настройки",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
 }
