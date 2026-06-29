@@ -68,3 +68,6 @@
 -dontwarn javax.lang.model.**
 -dontwarn autovalue.shaded.**
 -dontwarn com.google.auto.value.**
+
+# --- MediaPipe 0.10.35: image-processing классы (не нужны для text-only LLM) ---
+-dontwarn com.google.mediapipe.framework.image.**
