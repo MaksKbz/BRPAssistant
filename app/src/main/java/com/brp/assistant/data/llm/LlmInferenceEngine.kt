@@ -162,19 +162,19 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun tryInitMediaPipeWithCpuFallback(modelFile: File): Result<Unit> {
-        // MediaPipe tasks-genai 0.10.14 не предоставляет явного выбора бэкенда
-        // (setPreferredBackend отсутствует) — инициализируем на дефолтном бэкенде.
+        // FIX краша: ранее устанавливался жёсткий setMaxTokens(1024). Для моделей с
+        // kv-cache (ekv1280/ekv4096) это могло приводить к нативному крашу MediaPipe
+        // при createFromOptions на некоторых устройствах. Теперь отдаём только
+        // modelPath — MediaPipe берёт остальные параметры из метаданных модели.
         return try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
-                .setMaxTokens(MAX_TOKENS)
-                .setTemperature(DEFAULT_TEMP)
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
-            Log.i(TAG, "MediaPipe initialized with default backend")
+            Log.i(TAG, "MediaPipe initialized: ${modelFile.name}")
             Result.success(Unit)
         } catch (e: Throwable) {
-            Log.e(TAG, "MediaPipe init failed (default backend)", e)
+            Log.e(TAG, "MediaPipe init failed for ${modelFile.name}", e)
             Result.failure(e)
         }
     }
