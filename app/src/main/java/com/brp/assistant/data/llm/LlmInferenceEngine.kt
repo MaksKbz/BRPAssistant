@@ -212,8 +212,13 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
+                        // FIX краша: используем generateResponseAsync (ListenableFuture) вместо
+                        // синхронного generateResponse(). Блокирующий вызов вызывал
+                        // нативный SIGSEGV на некоторых .task моделях (Qwen2.5-0.5B).
+                        // ListenableFuture.get() в IO-диспетчере — стабильно.
+                        val future = inference.generateResponseAsync(prompt)
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
-                            inference.generateResponse(prompt)
+                            future.get()
                         }
                         if (!isActive) return@withContext Result.failure(
                             CancellationException("Генерация отменена")
