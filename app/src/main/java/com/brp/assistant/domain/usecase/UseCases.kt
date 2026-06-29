@@ -25,12 +25,10 @@ class DiagnoseUseCase @Inject constructor(
         message: String,
         vehicleId: String?,
         history: List<ChatMessage>,
-        onPartial: (String) -> Unit
+        onPartial: (String) -> Unit,
+        forceRemote: Boolean = false
     ): Flow<Result<DiagnosisResult>> = flow {
         try {
-            // FIX #4: читаем все настройки атомарно здесь,
-            // чтобы provider, key и systemPrompt не расходились с тем,
-            // что перечитывает RemoteLlmEngine.generateResponse()
             val provider = settingsRepository.aiProvider.first() ?: "Gemini"
             val apiKey = if (provider == "Gemini")
                 settingsRepository.geminiApiKey.first()
@@ -41,25 +39,18 @@ class DiagnoseUseCase @Inject constructor(
             val systemPrompt = settingsRepository.aiSystemPrompt.first()
             val temperature = settingsRepository.aiTemperature.first()
 
-            // FIX роутинга: приоритет у АКТИВНОЙ локальной модели (см. ChatUseCase).
             val localReady = llm.isReady()
-            val useRemote = !localReady && !apiKey.isNullOrBlank()
-            val isLocalProvider = provider.equals("Local", ignoreCase = true)
+            val useRemote = forceRemote || (!localReady && !apiKey.isNullOrBlank())
 
-            if (!localReady && !useRemote && !isLocalProvider) {
+            if (useRemote && apiKey.isNullOrBlank()) {
                 emit(Result.failure(Exception(
-                    if (apiKey.isNullOrBlank())
-                        "Не настроена локальная модель и нет API-ключа $provider. " +
-                        "Скачайте офлайн-модель или укажите ключ в Настройках → AI-провайдер."
-                    else
-                        "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
+                    "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
                 )))
                 return@flow
             }
             if (!localReady && !useRemote) {
                 emit(Result.failure(Exception(
-                    "Локальная модель не готова и онлайн не настроен. " +
-                    "Активируйте модель в Менеджере моделей или настройте API-ключ."
+                    "Локальная модель не готова. Активируйте модель в Менеджере моделей или настройте API-ключ."
                 )))
                 return@flow
             }
@@ -89,8 +80,6 @@ class DiagnoseUseCase @Inject constructor(
                 style = llm.getActivePromptStyle()
             )
 
-            // FIX #4: передаём provider/modelName/apiKey/systemPrompt явно,
-            // а не полагаемся на повторное чтение DataStore внутри Engine
             val result = if (useRemote) {
                 remoteLlm.generateResponse(
                     prompt = prompt,
@@ -133,9 +122,9 @@ class ChatUseCase @Inject constructor(
         mode: RetrievalMode,
         vehicleId: String?,
         history: List<ChatMessage>,
-        onPartial: (String) -> Unit
+        onPartial: (String) -> Unit,
+        forceRemote: Boolean = false
     ): Result<String> {
-        // Читаем все настройки за один раз, передаём явно.
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
         val apiKey = if (provider == "Gemini")
             settingsRepository.geminiApiKey.first()
@@ -146,28 +135,19 @@ class ChatUseCase @Inject constructor(
         val systemPrompt = settingsRepository.aiSystemPrompt.first()
         val temperature = settingsRepository.aiTemperature.first()
 
-        // FIX роутинга: приоритет у АКТИВНОЙ локальной модели.
-        // Раньше useRemote = !apiKey.isNullOrBlank() — если настроен ключ Gemini/Groq,
-        // чат ВСЕГДА шёл в облако, даже при активированной локальной модели.
-        // Теперь: если локальная модель инициализирована и готова — используем её;
-        // онлайн — только фолбэк, когда локальная не готова.
+        // Роутинг: forceRemote (ручной выбор онлайна) имеет приоритет.
+        // Иначе — локальная модель если готова, онлайн как фолбэк.
         val localReady = llm.isReady()
-        val useRemote = !localReady && !apiKey.isNullOrBlank()
-        val isLocalProvider = provider.equals("Local", ignoreCase = true)
+        val useRemote = forceRemote || (!localReady && !apiKey.isNullOrBlank())
 
-        if (!localReady && !useRemote && !isLocalProvider) {
+        if (useRemote && apiKey.isNullOrBlank()) {
             return Result.failure(Exception(
-                if (apiKey.isNullOrBlank())
-                    "Не настроена локальная модель и нет API-ключа $provider. " +
-                    "Скачайте офлайн-модель или укажите ключ в Настройках → AI-провайдер."
-                else
-                    "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
+                "API-ключ для $provider не настроен. Перейдите в Настройки → AI-провайдер."
             ))
         }
         if (!localReady && !useRemote) {
             return Result.failure(Exception(
-                "Локальная модель не готова и онлайн не настроен. " +
-                "Активируйте модель в Менеджере моделей или настройте API-ключ."
+                "Локальная модель не готова. Активируйте модель в Менеджере моделей или настройте API-ключ."
             ))
         }
 

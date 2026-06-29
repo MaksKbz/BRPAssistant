@@ -78,17 +78,13 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
 
         var attempt = 0
-        val maxRetry = 4
+        val maxRetry = 6
         var success = false
         var lastError: String? = null
         var dnsErrors = 0
 
         while (attempt < maxRetry && !success) {
             try {
-                // Стратегия URL: hf-mirror.com ПЕРВЫМ.
-                // В регионах где huggingface.co DNS блокируется/не резолвится
-                // (часто в Казахстане, РФ, Китае), hf-mirror.com — прокси-CDN,
-                // который надёжнее. Чередуем зеркало и прямой HF.
                 val encodedFileName = Uri.encode(model.filename)
                 val currentUrl = when (attempt % 2) {
                     0    -> "https://hf-mirror.com/${model.repoId}/resolve/main/$encodedFileName?download=true"
@@ -104,12 +100,14 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             } catch (e: Exception) {
                 attempt++
                 lastError = e.localizedMessage ?: e.message ?: "Неизвестная ошибка"
-                // Детектируем DNS-ошибки для более понятного сообщения
                 if (lastError.contains("Unable to resolve host") ||
                     lastError.contains("No address associated with hostname")) {
                     dnsErrors++
                 }
                 Log.e(TAG, "Attempt $attempt failed for ${model.id}: ${e.message}")
+                // Сохраняем .part файл для resume на следующей попытке.
+                // Удаляем только при полной неудаче — для больших моделей (3-5 ГБ)
+                // потеря частичной загрузки означает вечный цикл с нуля.
                 if (attempt >= maxRetry) {
                     if (tempFile.exists()) {
                         val deleted = tempFile.delete()
@@ -124,8 +122,7 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                     }
                     emit(ModelDownloadState.Error(model.id, userMessage, e))
                 } else {
-                    // Экспоненциальная задержка: 3s → 6s → 12s
-                    delay(3000L * (1L shl (attempt - 1)))
+                    delay(2000L * attempt)
                 }
             }
         }

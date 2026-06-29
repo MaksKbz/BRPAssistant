@@ -116,7 +116,7 @@ object PublicOfflineModelCatalog {
             license      = "Apache 2.0",
             approxSizeMb = 614,
             minRamGb     = 3,
-            promptStyle  = PromptStyle.CHATML,
+            promptStyle  = PromptStyle.QWEN3,
             format       = ModelFormat.LITERTLM,
             description  = "614 МБ. Qwen3 нового поколения (2025). Поддерживает режим размышлений: добавьте /think в запрос для пошагового анализа или /no_think для быстрого ответа. Требует 3 ГБ RAM.",
             downloadUrl  = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.litertlm"
@@ -171,7 +171,7 @@ object PublicOfflineModelCatalog {
             license      = "Apache 2.0",
             approxSizeMb = 1740,
             minRamGb     = 5,
-            promptStyle  = PromptStyle.CHATML,
+            promptStyle  = PromptStyle.QWEN3,
             format       = ModelFormat.LITERTLM,
             description  = "~1.7 ГБ. Qwen3 нового поколения с нативным режимом размышлений. Добавьте /think для глубокого анализа кодов ошибок BRP. Рекомендуется 5+ ГБ RAM (Snapdragon 778/7s Gen 2 и новее).",
             downloadUrl  = "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3_1.7B.litertlm"
@@ -225,7 +225,7 @@ object PublicOfflineModelCatalog {
             license      = "Apache 2.0",
             approxSizeMb = 5810,
             minRamGb     = 12,
-            promptStyle  = PromptStyle.CHATML,
+            promptStyle  = PromptStyle.QWEN3,
             format       = ModelFormat.LITERTLM,
             description  = "5.7 ГБ. Qwen3 4B — мощнейшая офлайн-модель каталога. Channelwise int8 квантизация. Нативный режим размышлений (/think), Tool Use, контекст 32K. Только для топ-флагманов с 12+ ГБ RAM.",
             downloadUrl  = "https://huggingface.co/litert-community/Qwen3-4B/resolve/main/qwen3_4b_channelwise_int8_float32kv.litertlm"
