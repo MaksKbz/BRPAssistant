@@ -45,6 +45,9 @@ class SettingsRepository @Inject constructor(
     private val AI_TEMPERATURE      = floatPreferencesKey("ai_temperature")
     private val PURCHASE_DATE       = longPreferencesKey("purchase_date")
     private val APP_THEME           = stringPreferencesKey("app_theme")
+    // Глобальный выбор модели чата: null=по умолчанию (локальная если готова),
+    // "Gemini"/"Groq" = онлайн. Применяется ко ВСЕМ чатам.
+    private val CHAT_FORCE_ONLINE   = stringPreferencesKey("chat_force_online")
 
     // ── EncryptedSharedPreferences (только для API-ключей) ─────────────────
     private companion object {
@@ -100,6 +103,16 @@ class SettingsRepository @Inject constructor(
         it[AI_SYSTEM_PROMPT] ?: "Ты — экспертный ассистент BRP. Отвечай кратко и профессионально."
     }
     val aiTemperature: Flow<Float> = context.dataStore.data.map { it[AI_TEMPERATURE] ?: 0.7f }
+
+    // Глобальный выбор модели чата: null=по умолчанию, "Gemini"/"Groq"=онлайн
+    val chatForceOnline: Flow<String?> = context.dataStore.data.map { it[CHAT_FORCE_ONLINE] }
+
+    suspend fun setChatForceOnline(provider: String?) {
+        context.dataStore.edit { prefs ->
+            if (provider == null) prefs.remove(CHAT_FORCE_ONLINE)
+            else prefs[CHAT_FORCE_ONLINE] = provider
+        }
+    }
     val purchaseDate: Flow<Long?> = context.dataStore.data.map { it[PURCHASE_DATE] }
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "System" }
 

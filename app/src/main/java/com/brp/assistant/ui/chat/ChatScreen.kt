@@ -657,12 +657,13 @@ private fun LlmOptionRow(
     ) {
         RadioButton(selected = isSelected, onClick = if (enabled) onClick else null, enabled = enabled)
         Spacer(Modifier.width(8.dp))
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
+                maxLines = 2
             )
             Text(
                 subtitle,

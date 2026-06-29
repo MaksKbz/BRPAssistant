@@ -186,11 +186,7 @@ fun BrpNavGraph(
                                     label    = { Text(item.screen.label) },
                                     selected = selected,
                                     onClick  = {
-                                        navController.navigate(item.screen.route) {
-                                            popUpTo(Screen.Home.route) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState    = true
-                                        }
+                                        navigateSafe(navController, item.screen.route)
                                     }
                                 )
                             }
@@ -275,11 +271,7 @@ private fun ExpandedLayout(
                     label    = { Text(item.screen.label) },
                     selected = selected,
                     onClick  = {
-                        navController.navigate(item.screen.route) {
-                            popUpTo(Screen.Home.route) { saveState = true }
-                            launchSingleTop = true
-                            restoreState    = true
-                        }
+                        navigateSafe(navController, item.screen.route)
                     },
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
