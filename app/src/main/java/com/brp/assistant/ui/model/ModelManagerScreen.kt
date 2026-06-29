@@ -90,6 +90,7 @@ fun ModelManagerScreen(
     var showProviderMenu by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
     var systemPromptInput by remember(state.aiSystemPrompt) { mutableStateOf(state.aiSystemPrompt) }
+    var promptApplied by remember { mutableStateOf(false) }
     var showTestPrompt by remember { mutableStateOf(false) }
 
     val providers = listOf("Gemini", "Groq (Cloud)")
@@ -230,8 +231,14 @@ fun ModelManagerScreen(
                             shape = RoundedCornerShape(12.dp)
                         )
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            Button(onClick = { onUpdateSystemPrompt(systemPromptInput) }, modifier = Modifier.height(40.dp)) {
-                                Text("Применить", fontSize = 14.sp)
+                            Button(
+                                onClick = {
+                                    onUpdateSystemPrompt(systemPromptInput)
+                                    promptApplied = true
+                                },
+                                modifier = Modifier.height(40.dp)
+                            ) {
+                                Text(if (promptApplied) "✓ Сохранено" else "Применить", fontSize = 14.sp)
                             }
                         }
                         Text("Температура: ${"%.1f".format(state.aiTemperature)}", fontSize = 12.sp)

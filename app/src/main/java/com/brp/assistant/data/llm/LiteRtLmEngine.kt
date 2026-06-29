@@ -7,6 +7,7 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.SamplerConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -46,6 +47,9 @@ class LiteRtLmEngine @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LiteRtLmEngine"
+        // Лимит генерации: kv-cache + максимальное число выходных токенов.
+        // Без этого LiteRT-LM генерирует бесконечно (модели входят в цикл повторов).
+        private const val MAX_TOKENS = 1024
     }
 
     private var engine: Engine? = null
@@ -125,7 +129,10 @@ class LiteRtLmEngine @Inject constructor(
             val backend: Backend = if (useGpu) Backend.GPU() else Backend.CPU()
             val config = EngineConfig(
                 modelPath = modelFile.absolutePath,
-                backend = backend
+                backend = backend,
+                // FIX бесконечной генерации: без maxNumTokens модели входят в цикл
+                // повторов и генерируют бесконечно, забивая экран.
+                maxNumTokens = MAX_TOKENS
             )
             Engine(config).also { it.initialize() }
         } catch (e: Throwable) {
@@ -152,19 +159,33 @@ class LiteRtLmEngine @Inject constructor(
         val eng = engine
             ?: throw IllegalStateException("LiteRtLmEngine не инициализирован")
 
-        val convConfig = if (systemPrompt.isNotBlank()) {
-            // systemInstruction имеет тип Contents? — оборачиваем строку.
-            ConversationConfig(systemInstruction = Contents.of(systemPrompt))
-        } else {
-            ConversationConfig()
-        }
+        val convConfig = ConversationConfig(
+            systemInstruction = if (systemPrompt.isNotBlank()) Contents.of(systemPrompt) else null,
+            // SamplerConfig предотвращает повторы (repetition loop):
+            // topK=40 — выбираем из 40 лучших токенов
+            // topP=0.9 — nucleus sampling
+            // temperature=0.7 — умеренная креативность
+            samplerConfig = SamplerConfig(
+                topK = 40,
+                topP = 0.9,
+                temperature = 0.7
+            )
+        )
 
         eng.createConversation(convConfig).use { conversation ->
             // sendMessageAsync(text) возвращает Flow<Message>; текст чанка — toString().
             // FIX: Qwen3 и подобные модели стримят блок <think>...</think> (рассуждения).
             // Пользователю их показывать не нужно — фильтруем из вывода.
             var insideThink = false
+            var tokenCount = 0
             conversation.sendMessageAsync(prompt).collect { message ->
+                // Защитный лимит: обрываем генерацию после 1500 токенов.
+                // Даже с SamplerConfig некоторые модели могут зацикливаться.
+                tokenCount++
+                if (tokenCount > 1500) {
+                    Log.w(TAG, "Generation stopped: token limit reached (1500)")
+                    return@collect
+                }
                 // Проверяем флаг на каждом сообщении — closeInternal() мог быть
                 // вызван уже после старта генерации
                 if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
