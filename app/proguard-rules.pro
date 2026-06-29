@@ -9,7 +9,6 @@
 
 # --- Room / DB entities ---
 -keep class com.brp.assistant.data.db.entities.** { *; }
--keep class com.brp.assistant.data.db.enteties.** { *; }
 
 # --- kotlinx.serialization ---
 # КРИТИЧНО: R8 стирает поля @Serializable data-классов и фабрики
@@ -60,3 +59,12 @@
 # --- WorkManager (ModelDownloadWorker) ---
 -keep class androidx.work.** { *; }
 -keep class com.brp.assistant.data.llm.download.** { *; }
+
+# --- R8: missing classes ---
+# Опциональные protobuf-классы MediaPipe и annotation-processor классы
+# (javax.lang.model.*, autovalue/javapoet) ссылаются на классы, которых нет в
+# Android runtime. Они не используются приложением — гасим предупреждения R8.
+-dontwarn com.google.mediapipe.proto.**
+-dontwarn javax.lang.model.**
+-dontwarn autovalue.shaded.**
+-dontwarn com.google.auto.value.**
