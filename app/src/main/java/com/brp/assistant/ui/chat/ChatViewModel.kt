@@ -342,7 +342,11 @@ class ChatViewModel @Inject constructor(
         val userMsg = ChatMessage(content = text, role = MessageRole.USER)
         _state.update { it.copy(messages = it.messages + userMsg, isGenerating = true, error = null) }
 
-        val effectiveModelId: String? = _state.value.selectedLlmModelId
+        // FIX: передаём РЕАЛЬНЫЙ vehicleId (выбранная техника BRP), а не
+        // selectedLlmModelId (ID языковой модели), как было раньше.
+        // Раньше в use case попадал ID LLM-модели как vehicleId → техника
+        // не передавалась в промпт, и модель спрашивала «что за техника».
+        val effectiveVehicleId = vehicleId ?: _state.value.currentVehicleId
 
         generationJob = viewModelScope.launch {
             val mem = deviceCapability.checkMemory()
@@ -366,7 +370,7 @@ class ChatViewModel @Inject constructor(
 
             try {
                 if (mode == "diagnosis") {
-                    diagnoseUseCase(text, effectiveModelId, history) { partial ->
+                    diagnoseUseCase(text, effectiveVehicleId, history) { partial ->
                         assistantContent += partial
                         updateLastMessage(assistantContent)
                     }.collect { result ->
@@ -386,7 +390,7 @@ class ChatViewModel @Inject constructor(
                         "accessory" -> RetrievalMode.ACCESSORY
                         else        -> RetrievalMode.BOTH
                     }
-                    val result = chatUseCase(text, retrievalMode, effectiveModelId, history) { partial ->
+                    val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history) { partial ->
                         assistantContent += partial
                         updateLastMessage(assistantContent)
                     }

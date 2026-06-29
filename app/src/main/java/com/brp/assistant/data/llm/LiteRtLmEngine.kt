@@ -161,13 +161,39 @@ class LiteRtLmEngine @Inject constructor(
 
         eng.createConversation(convConfig).use { conversation ->
             // sendMessageAsync(text) возвращает Flow<Message>; текст чанка — toString().
+            // FIX: Qwen3 и подобные модели стримят блок <think>...</think> (рассуждения).
+            // Пользователю их показывать не нужно — фильтруем из вывода.
+            var insideThink = false
             conversation.sendMessageAsync(prompt).collect { message ->
                 // Проверяем флаг на каждом сообщении — closeInternal() мог быть
                 // вызван уже после старта генерации
                 if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
-                val token = message.toString()
-                onPartial(token)
-                emit(token)
+                var token = message.toString()
+
+                // Удаляем <think> и </think> теги и всё между ними из стрима.
+                // Т.к. токены приходят по частям, отслеживаем состояние.
+                val sb = StringBuilder()
+                var i = 0
+                while (i < token.length) {
+                    if (!insideThink && token.startsWith("<think>", i)) {
+                        insideThink = true
+                        i += "<think>".length
+                    } else if (insideThink && token.startsWith("</think>", i)) {
+                        insideThink = false
+                        i += "</think>".length
+                    } else if (insideThink) {
+                        i++ // пропускаем символ внутри блока рассуждений
+                    } else {
+                        sb.append(token[i])
+                        i++
+                    }
+                }
+                token = sb.toString()
+
+                if (token.isNotEmpty()) {
+                    onPartial(token)
+                    emit(token)
+                }
             }
         }
     }.flowOn(Dispatchers.IO)

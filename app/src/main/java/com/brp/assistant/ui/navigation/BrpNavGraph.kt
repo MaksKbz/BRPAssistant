@@ -61,6 +61,23 @@ private val bottomScreens = listOf(
     Screen.Home, Screen.Diagnose, Screen.AccessoryShop, Screen.VehicleSelect
 )
 
+/**
+ * Безопасная навигация: для Home — popBackStack к существующему экрану
+ * (избегает дублирования Home в стеке), для остальных — navigate с launchSingleTop.
+ * Раньше navigate("home") создавал НОВЫЙ Home поверх текущего → кнопка «Домой»
+ * не работала (визуально ничего не менялось или рос стек).
+ */
+private fun navigateSafe(navController: androidx.navigation.NavHostController, route: String) {
+    if (route == Screen.Home.route) {
+        navController.popBackStack(Screen.Home.route, inclusive = false)
+    } else {
+        navController.navigate(route) {
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+}
+
 private data class NavItem(
     val screen: Screen,
     val iconContent: @Composable () -> Unit
@@ -627,7 +644,7 @@ private fun NavHostContent(
                 onSelectOnlineLlm      = { chatVm.selectOnlineLlm(it) },
                 onResetLlm             = { chatVm.resetLlmSelection() },
                 onSend                 = { msg -> chatVm.sendMessage(msg, mode, selectedVehicleId) },
-                onNavigate             = { route -> navController.navigate(route) },
+                onNavigate             = { route -> navigateSafe(navController, route) },
                 onBack                 = { navController.popBackStack() },
                 widthSizeClass         = widthSizeClass,
                 sessionHistory         = state.sessionHistory,
@@ -654,7 +671,7 @@ private fun NavHostContent(
                 onSend           = { text -> navController.navigate(Screen.Chat.createRoute("diagnosis", text)) },
                 onSelectVehicle  = { navController.navigate(Screen.VehicleSelect.route) },
                 onGoToSituations = { navController.navigate(Screen.Situations.route) },
-                onNavigate       = { route -> navController.navigate(route) },
+                onNavigate       = { route -> navigateSafe(navController, route) },
                 onBack           = { navController.popBackStack() }
             )
         }
@@ -674,7 +691,7 @@ private fun NavHostContent(
                     navController.navigate(Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat"))
                 },
                 onSelectVehicle      = { navController.navigate(Screen.VehicleSelect.route) },
-                onNavigate           = { route -> navController.navigate(route) },
+                onNavigate           = { route -> navigateSafe(navController, route) },
                 onBack               = { navController.popBackStack() }
             )
         }
@@ -694,7 +711,7 @@ private fun NavHostContent(
                 onUpdateSystemPrompt = { modelVm.updateSystemPrompt(it) },
                 onUpdateTemperature  = { modelVm.updateTemperature(it) },
                 onClearError         = { modelVm.clearError() },
-                onNavigate           = { route -> navController.navigate(route) },
+                onNavigate           = { route -> navigateSafe(navController, route) },
                 onBack               = { navController.popBackStack() }
             )
         }
