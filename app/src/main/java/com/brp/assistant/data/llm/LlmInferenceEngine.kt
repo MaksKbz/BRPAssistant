@@ -212,22 +212,19 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // FIX краша: используем generateResponseAsync (стриминг) вместо
+                        // FIX краша: используем generateResponseAsync (ListenableFuture) вместо
                         // синхронного generateResponse(). Блокирующий вызов вызывал
                         // нативный SIGSEGV на некоторых .task моделях (Qwen2.5-0.5B).
-                        // Async API работает в отдельном потоке MediaPipe и стабильнее.
-                        val sb = StringBuilder()
-                        withTimeout(GENERATION_TIMEOUT_MS) {
-                            inference.generateResponseAsync(prompt).collect { token ->
-                                if (!isActive) return@collect
-                                sb.append(token)
-                                onPartial(token)
-                            }
+                        // ListenableFuture.get() в IO-диспетчере — стабильно.
+                        val future = inference.generateResponseAsync(prompt)
+                        val response = withTimeout(GENERATION_TIMEOUT_MS) {
+                            future.get()
                         }
                         if (!isActive) return@withContext Result.failure(
                             CancellationException("Генерация отменена")
                         )
-                        Result.success(sb.toString())
+                        withContext(Dispatchers.Main) { onPartial(response) }
+                        Result.success(response)
                     } catch (e: TimeoutCancellationException) {
                         val msg = "⏱ Превышено время ожидания ответа (${GENERATION_TIMEOUT_MS / 1000}с). " +
                             "Попробуйте более короткий вопрос или лёгкую модель."
