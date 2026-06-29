@@ -170,7 +170,6 @@ class LlmInferenceEngine @Inject constructor(
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
                 .setMaxTokens(MAX_TOKENS)
-                .setTemperature(DEFAULT_TEMP)
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
             Log.i(TAG, "MediaPipe initialized: ${modelFile.name}")
