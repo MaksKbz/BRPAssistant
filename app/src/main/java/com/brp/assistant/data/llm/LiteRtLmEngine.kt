@@ -47,9 +47,11 @@ class LiteRtLmEngine @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LiteRtLmEngine"
-        // Лимит генерации: kv-cache + максимальное число выходных токенов.
-        // Без этого LiteRT-LM генерирует бесконечно (модели входят в цикл повторов).
-        private const val MAX_TOKENS = 1024
+        // Лимит kv-cache: ВХОД + ВЫХОД суммарно.
+        // Системный промпт BRP (~900 токенов) + RAG-контекст + история + ответ
+        // требуют минимум ~4000. 4096 — безопасный минимум для всех моделей.
+        // Без этого модель падает: "Input token ids are too long. 1254 >= 1024".
+        private const val MAX_TOKENS = 4096
     }
 
     private var engine: Engine? = null
