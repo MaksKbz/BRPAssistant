@@ -257,6 +257,16 @@ def build_database():
         -- Без этого PRAGMA остаётся 0 → Room считает БД устаревшей и требует
         -- миграцию, которой нет → IllegalStateException при первом запуске.
         PRAGMA user_version = 6;
+
+        -- room_master_table: identity-хэш схемы Room (из app/schemas/6.json).
+        -- Room при открытии читает этот хэш; при совпадении он НЕ выполняет
+        -- строгую валидацию и открывает pre-packaged asset напрямую.
+        -- Без этой таблицы Room падает: расхождения (формат FTS, FK) блокируют
+        -- открытие → «Ошибка БД» + пустые экраны, хотя ДАННЫЕ в asset есть.
+        -- ⚠️ Если изменить entity-схему в BrpDatabase.kt — пересоберите проект и
+        --    скопируйте НОВЫЙ identityHash из app/schemas/<v>.json сюда.
+        CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT);
+        INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES(42, '379b5e762bde447ee79bca801da4df98');
     """)
     
     # Insert models
