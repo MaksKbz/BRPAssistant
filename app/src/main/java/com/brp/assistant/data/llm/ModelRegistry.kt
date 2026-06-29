@@ -74,17 +74,17 @@ object PublicOfflineModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
 
         OfflineModelInfo(
-            id           = "smollm2_135m_task",
+            id           = "smollm2_135m_litertlm",
             title        = "SmolLM2 135M • 135 МБ",
             repoId       = "litert-community/SmolLM2-135M-Instruct",
-            filename     = "smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task",
+            filename     = "SmolLM2_135M_Instruct.litertlm",
             license      = "Apache 2.0",
             approxSizeMb = 135,
             minRamGb     = 2,
             promptStyle  = PromptStyle.CHATML,
-            format       = ModelFormat.TASK,
+            format       = ModelFormat.LITERTLM,
             description  = "Самая лёгкая модель — 135 МБ. Запускается на любом Android-устройстве от 2 ГБ RAM. Отвечает на простые вопросы, подходит для базовой диагностики.",
-            downloadUrl  = "https://huggingface.co/litert-community/SmolLM2-135M-Instruct/resolve/main/smollm2-135m-instruct_multi-prefill-seq_q8_ekv1024.task"
+            downloadUrl  = "https://huggingface.co/litert-community/SmolLM2-135M-Instruct/resolve/main/SmolLM2_135M_Instruct.litertlm"
         ),
 
         // ─────────────────────────────────────────────────────────────────────

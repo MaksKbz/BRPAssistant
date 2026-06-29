@@ -128,6 +128,14 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        // Глобальный выбор онлайна: синхронизируем selectedOnlineProvider
+        // из DataStore, чтобы он применялся ко ВСЕМ чатам.
+        viewModelScope.launch {
+            settingsRepository.chatForceOnline.collect { provider ->
+                _state.update { it.copy(selectedOnlineProvider = provider) }
+            }
+        }
+
         viewModelScope.launch {
             llmEngine.activeModelId.collect { id ->
                 val items = PublicOfflineModelCatalog.models.map { model ->
@@ -325,14 +333,25 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectOfflineLlm(modelId: String?) {
+        viewModelScope.launch {
+            // Сбрасываем глобальный выбор онлайна — используем локальную модель
+            settingsRepository.setChatForceOnline(null)
+        }
         _state.update { it.copy(selectedLlmModelId = modelId, selectedOnlineProvider = null) }
     }
 
     fun selectOnlineLlm(provider: String) {
+        viewModelScope.launch {
+            // Глобально выбираем онлайн — применяется ко ВСЕМ чатам
+            settingsRepository.setChatForceOnline(provider)
+        }
         _state.update { it.copy(selectedOnlineProvider = provider, selectedLlmModelId = null) }
     }
 
     fun resetLlmSelection() {
+        viewModelScope.launch {
+            settingsRepository.setChatForceOnline(null)
+        }
         _state.update { it.copy(selectedLlmModelId = null, selectedOnlineProvider = null) }
     }
 
@@ -364,7 +383,9 @@ class ChatViewModel @Inject constructor(
             val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
             val history = _state.value.messages
+            // Глобальный выбор модели: если в DataStore выбран онлайн — forceRemote.
             val forceRemote = _state.value.selectedOnlineProvider != null
+                || settingsRepository.chatForceOnline.first() != null
             var assistantContent = ""
             val assistantMsg = ChatMessage(content = "", role = MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }

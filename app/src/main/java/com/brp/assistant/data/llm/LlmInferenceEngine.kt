@@ -162,13 +162,14 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun tryInitMediaPipeWithCpuFallback(modelFile: File): Result<Unit> {
-        // FIX краша: ранее устанавливался жёсткий setMaxTokens(1024). Для моделей с
-        // kv-cache (ekv1280/ekv4096) это могло приводить к нативному крашу MediaPipe
-        // при createFromOptions на некоторых устройствах. Теперь отдаём только
-        // modelPath — MediaPipe берёт остальные параметры из метаданных модели.
+        // MediaPipe ТРЕБУЕТ setMaxTokens для генерации. Без него модель
+        // инициализируется, но generateResponse возвращает пустую строку.
+        // Краш на Qwen2.5-0.5B был от синхронного generateResponse(), а не от
+        // maxTokens — теперь используется generateResponseAsync().
         return try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
+                .setMaxTokens(MAX_TOKENS)
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
             Log.i(TAG, "MediaPipe initialized: ${modelFile.name}")
