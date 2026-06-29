@@ -83,15 +83,17 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
 
         while (attempt < maxRetry && !success) {
             try {
-                val currentUrl = if (model.downloadUrl != null) {
-                    model.downloadUrl
-                } else {
-                    val encodedFileName = Uri.encode(model.filename)
-                    when (attempt) {
-                        0    -> "https://hf-mirror.com/${model.repoId}/resolve/main/${encodedFileName}?download=true"
-                        1    -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
-                        else -> "https://huggingface.co/${model.repoId}/resolve/main/${encodedFileName}?download=true"
-                    }
+                // Стратегия URL: пробуем источники по очереди.
+                // HF перешёл на Xet-CDN, который для НЕаутентифицированных Range-запросов
+                // отдаёт 401 (x-hf-warning: unauthenticated). hf-mirror.com — альтернативный
+                // прокси, который часто надёжнее для мобильных клиентов. Поэтому даже при
+                // наличии downloadUrl fallback-им на зеркало при сбое.
+                val encodedFileName = Uri.encode(model.filename)
+                val currentUrl = when (attempt) {
+                    0    -> model.downloadUrl
+                        ?: "https://huggingface.co/${model.repoId}/resolve/main/$encodedFileName?download=true"
+                    1    -> "https://hf-mirror.com/${model.repoId}/resolve/main/$encodedFileName?download=true"
+                    else -> "https://huggingface.co/${model.repoId}/resolve/main/$encodedFileName?download=true"
                 }
 
                 downloadFileInternalWithUrl(currentUrl, model, tempFile, outFile).collect { state ->
@@ -153,12 +155,15 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         if (finalUrl.contains("huggingface.co")) {
             requestBuilder.header("Referer", "https://huggingface.co/")
         }
-        if (partialBytes > 0) {
+        if (partialBytes > 0 && !finalUrl.contains("hf-mirror.com")) {
+            // Range resume отправляем только не-HF-mirror'у.
+            // HF Xet-CDN для неаутентифицированных Range-запросов отдаёт 401 —
+            // ниже ловим 401 и повторяем с нуля (без Range).
             requestBuilder.header("Range", "bytes=$partialBytes-")
         }
 
         val request = requestBuilder.build()
-        val response = try {
+        var response = try {
             client.newCall(request).execute()
         } catch (e: Exception) {
             Log.e(TAG, "Network error: ${e.message}")
@@ -166,6 +171,16 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
 
         try {
+            // FIX: HF Xet-CDN может вернуть 401 на Range для неаутентифицированных.
+            // В этом случае закрываем ответ, удаляем .part и повторяем без Range (с нуля).
+            if (response.code == 401 && partialBytes > 0) {
+                Log.w(TAG, "HF returned 401 on Range request — retrying from scratch (no resume)")
+                response.close()
+                if (tempFile.exists()) tempFile.delete()
+                val noRangeRequest = request.newBuilder().removeHeader("Range").build()
+                response = client.newCall(noRangeRequest).execute()
+            }
+
             if (!response.isSuccessful && response.code != 206) {
                 when (response.code) {
                     403, 401 -> throw IOException("Доступ запрещен (${response.code}). HF требует авторизации для этой модели.")
@@ -175,8 +190,12 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             }
 
             val contentType = response.header("Content-Type")
-            if (contentType?.contains("text/html") == true && !model.isCustom) {
-                throw IOException("Сервер вернул HTML-страницу вместо файла.")
+            // Ослабленная проверка: выбрасываем HTML-ошибку ТОЛЬКО если ответ маленький
+            // (значит это реально HTML-страница с ошибкой, а не бинарный файл).
+            // Раньше CDN мог вернуть text/plain для .task/.litertlm и проверка ломала загрузку.
+            val bodyLen = response.body?.contentLength() ?: -1
+            if (contentType?.contains("text/html") == true && !model.isCustom && bodyLen in -1..65536) {
+                throw IOException("Сервер вернул HTML-страницу вместо файла модели.")
             }
 
             // FIX #2: передаём partialBytes только если сервер подтвердил resumable (206).
