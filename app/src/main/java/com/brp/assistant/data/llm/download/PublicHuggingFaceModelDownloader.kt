@@ -78,22 +78,22 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         }
 
         var attempt = 0
-        val maxRetry = 3
+        val maxRetry = 4
         var success = false
+        var lastError: String? = null
+        var dnsErrors = 0
 
         while (attempt < maxRetry && !success) {
             try {
-                // Стратегия URL: пробуем источники по очереди.
-                // HF перешёл на Xet-CDN, который для НЕаутентифицированных Range-запросов
-                // отдаёт 401 (x-hf-warning: unauthenticated). hf-mirror.com — альтернативный
-                // прокси, который часто надёжнее для мобильных клиентов. Поэтому даже при
-                // наличии downloadUrl fallback-им на зеркало при сбое.
+                // Стратегия URL: hf-mirror.com ПЕРВЫМ.
+                // В регионах где huggingface.co DNS блокируется/не резолвится
+                // (часто в Казахстане, РФ, Китае), hf-mirror.com — прокси-CDN,
+                // который надёжнее. Чередуем зеркало и прямой HF.
                 val encodedFileName = Uri.encode(model.filename)
-                val currentUrl = when (attempt) {
-                    0    -> model.downloadUrl
+                val currentUrl = when (attempt % 2) {
+                    0    -> "https://hf-mirror.com/${model.repoId}/resolve/main/$encodedFileName?download=true"
+                    else -> model.downloadUrl
                         ?: "https://huggingface.co/${model.repoId}/resolve/main/$encodedFileName?download=true"
-                    1    -> "https://hf-mirror.com/${model.repoId}/resolve/main/$encodedFileName?download=true"
-                    else -> "https://huggingface.co/${model.repoId}/resolve/main/$encodedFileName?download=true"
                 }
 
                 downloadFileInternalWithUrl(currentUrl, model, tempFile, outFile).collect { state ->
@@ -103,19 +103,29 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
                 if (success) break
             } catch (e: Exception) {
                 attempt++
+                lastError = e.localizedMessage ?: e.message ?: "Неизвестная ошибка"
+                // Детектируем DNS-ошибки для более понятного сообщения
+                if (lastError.contains("Unable to resolve host") ||
+                    lastError.contains("No address associated with hostname")) {
+                    dnsErrors++
+                }
                 Log.e(TAG, "Attempt $attempt failed for ${model.id}: ${e.message}")
                 if (attempt >= maxRetry) {
-                    // FIX #3: если все попытки провалились — удаляем битый .part файл.
-                    // Без этого при следующем запуске downloader находил .part файл,
-                    // видел partialBytes > 0, отправлял Range-заголовок и мог получить
-                    // 416 Range Not Satisfiable или склеить повреждённые куски.
                     if (tempFile.exists()) {
                         val deleted = tempFile.delete()
                         Log.w(TAG, "Deleted corrupt .part file for ${model.id}: $deleted")
                     }
-                    emit(ModelDownloadState.Error(model.id, "Ошибка загрузки: ${e.localizedMessage}. Проверьте соединение или попробуйте другую модель.", e))
+                    val userMessage = if (dnsErrors >= 2) {
+                        "Нет связи с сервером моделей (DNS). Проверьте интернет-соединение " +
+                        "и попробуйте снова. Если ошибка повторяется — возможно, " +
+                        "huggingface.co недоступен в вашем регионе."
+                    } else {
+                        "Ошибка загрузки: $lastError. Проверьте соединение или попробуйте другую модель."
+                    }
+                    emit(ModelDownloadState.Error(model.id, userMessage, e))
                 } else {
-                    delay(2000L * attempt)
+                    // Экспоненциальная задержка: 3s → 6s → 12s
+                    delay(3000L * (1L shl (attempt - 1)))
                 }
             }
         }
@@ -155,10 +165,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
         if (finalUrl.contains("huggingface.co")) {
             requestBuilder.header("Referer", "https://huggingface.co/")
         }
-        if (partialBytes > 0 && !finalUrl.contains("hf-mirror.com")) {
-            // Range resume отправляем только не-HF-mirror'у.
-            // HF Xet-CDN для неаутентифицированных Range-запросов отдаёт 401 —
-            // ниже ловим 401 и повторяем с нуля (без Range).
+        if (partialBytes > 0) {
+            // Range resume для всех источников. hf-mirror.com поддерживает resume (206).
+            // Если HF Xet-CDN вернёт 401 на Range — ниже ловим и повторяем без Range.
             requestBuilder.header("Range", "bytes=$partialBytes-")
         }
 
