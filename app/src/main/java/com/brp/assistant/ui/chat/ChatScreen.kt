@@ -470,20 +470,19 @@ fun ChatScreen(
                 }
             }
 
-            Box(modifier = Modifier.imePadding()) {
-                ChatInputBar(
-                    value = input,
-                    onValueChange = { input = it },
-                    onSend = {
-                        if (input.isNotBlank()) {
-                            onSend(input)
-                            input = ""
-                        }
-                    },
-                    enabled = isModelReady && !isGenerating,
-                    placeholder = "Задайте вопрос…"
-                )
-            }
+            ChatInputBar(
+                value = input,
+                onValueChange = { input = it },
+                onSend = {
+                    if (input.isNotBlank()) {
+                        onSend(input)
+                        input = ""
+                    }
+                },
+                enabled = isModelReady && !isGenerating,
+                placeholder = "Задайте вопрос…",
+                modifier = Modifier.imePadding()
+            )
         }
     }
 

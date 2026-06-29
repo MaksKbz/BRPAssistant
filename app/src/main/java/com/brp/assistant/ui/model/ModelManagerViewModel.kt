@@ -11,7 +11,10 @@ import com.brp.assistant.data.llm.RemoteLlmEngine
 import com.brp.assistant.data.llm.download.ModelDownloadState
 import com.brp.assistant.data.llm.download.PublicHuggingFaceModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -117,10 +120,15 @@ class ModelManagerViewModel @Inject constructor(
         }
     }
 
+    // FIX: загрузка в application-scope, НЕ viewModelScope.
+    // Большие модели (3-5 ГБ) качаются долго; при уходе с экрана viewModelScope
+    // отменял загрузку → прерывание. Теперь загрузка живёт до конца.
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     fun downloadModel(model: OfflineModelInfo) {
         if (_state.value.downloadingModelId != null) return
         downloadJob?.cancel()
-        downloadJob = viewModelScope.launch {
+        downloadJob = downloadScope.launch {
             _state.update { it.copy(downloadingModelId = model.id, error = null, downloadProgress = 0f) }
             downloader.downloadModel(model).collect { downloadState ->
                 when (downloadState) {

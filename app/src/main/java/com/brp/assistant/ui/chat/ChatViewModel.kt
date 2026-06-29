@@ -364,16 +364,17 @@ class ChatViewModel @Inject constructor(
             val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
             val history = _state.value.messages
+            val forceRemote = _state.value.selectedOnlineProvider != null
             var assistantContent = ""
             val assistantMsg = ChatMessage(content = "", role = MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }
 
             try {
                 if (mode == "diagnosis") {
-                    diagnoseUseCase(text, effectiveVehicleId, history) { partial ->
+                    diagnoseUseCase(text, effectiveVehicleId, history, { partial ->
                         assistantContent += partial
                         updateLastMessage(assistantContent)
-                    }.collect { result ->
+                    }, forceRemote = forceRemote).collect { result ->
                         result.onSuccess { diag ->
                             _state.update {
                                 it.copy(isGenerating = false,
@@ -390,10 +391,10 @@ class ChatViewModel @Inject constructor(
                         "accessory" -> RetrievalMode.ACCESSORY
                         else        -> RetrievalMode.BOTH
                     }
-                    val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history) { partial ->
+                    val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history, { partial ->
                         assistantContent += partial
                         updateLastMessage(assistantContent)
-                    }
+                    }, forceRemote = forceRemote)
                     _state.update { it.copy(isGenerating = false) }
                     if (result.isFailure) {
                         val errMsg = result.exceptionOrNull()?.message ?: "Неизвестная ошибка"
