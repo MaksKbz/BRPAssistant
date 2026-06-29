@@ -224,8 +224,8 @@ def build_database():
             modelId TEXT NOT NULL,
             fitmentNotes TEXT,
             requiresProfessionalInstall INTEGER NOT NULL,
-            FOREIGN KEY(accessoryId) REFERENCES brp_accessories(id) ON UPDATE NO ACTION ON DELETE NO ACTION ,
-            FOREIGN KEY(modelId) REFERENCES brp_models(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+            FOREIGN KEY(accessoryId) REFERENCES brp_accessories(id) ON UPDATE NO ACTION ON DELETE CASCADE ,
+            FOREIGN KEY(modelId) REFERENCES brp_models(id) ON UPDATE NO ACTION ON DELETE CASCADE
         );
         CREATE INDEX index_accessory_compatibility_accessoryId ON accessory_compatibility(accessoryId);
         CREATE INDEX index_accessory_compatibility_modelId ON accessory_compatibility(modelId);
