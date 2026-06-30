@@ -213,14 +213,11 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // MediaPipe .task не поддерживает отдельный system prompt.
-                        // Добавляем его в начало промпта — РАБОЧАЯ схема из v2.6.0.
-                        val fullPrompt = if (systemPrompt.isNotBlank()) {
-                            "$systemPrompt\n\n$prompt"
-                        } else {
-                            prompt
-                        }
-                        val future = inference.generateResponseAsync(fullPrompt)
+                        // FIX краша: используем generateResponseAsync (ListenableFuture) вместо
+                        // синхронного generateResponse(). Блокирующий вызов вызывал
+                        // нативный SIGSEGV на некоторых .task моделях (Qwen2.5-0.5B).
+                        // ListenableFuture.get() в IO-диспетчере — стабильно.
+                        val future = inference.generateResponseAsync(prompt)
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             future.get()
                         }
@@ -333,11 +330,6 @@ class LlmInferenceEngine @Inject constructor(
         val file = getModelFile(model)
         val partFile = File(file.parent, file.name + ".part")
         if (partFile.exists()) return false  // загрузка ещё идёт
-        // Для пользовательских моделей — проверяем только что файл > 1 МБ
-        // (approxSizeMb может быть неточным)
-        if (model.isCustom) {
-            return file.exists() && file.length() > 1024 * 1024
-        }
         val minSizeBytes = maxOf(
             FALLBACK_MIN_FILE_SIZE_BYTES,
             (model.approxSizeMb * 1024L * 1024L * 0.8).toLong()

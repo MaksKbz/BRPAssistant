@@ -78,6 +78,7 @@ class DiagnoseUseCase @Inject constructor(
                 selectedModel = brpModel,
                 history = history,
                 style = llm.getActivePromptStyle(),
+                customSystemPrompt = systemPrompt
             )
 
             val result = if (useRemote) {
@@ -91,7 +92,7 @@ class DiagnoseUseCase @Inject constructor(
                     onPartial = onPartial
                 )
             } else {
-                llm.generateResponse(prompt, onPartial, systemPrompt)
+                llm.generateResponse(prompt, onPartial)
             }
 
             result.onSuccess { text ->
@@ -163,6 +164,7 @@ class ChatUseCase @Inject constructor(
             accessories = accessories,
             selectedModel = brpModel,
             style = llm.getActivePromptStyle(),
+                customSystemPrompt = systemPrompt
         )
 
         return if (useRemote) {
@@ -176,7 +178,7 @@ class ChatUseCase @Inject constructor(
                 onPartial = onPartial
             )
         } else {
-            llm.generateResponse(prompt, onPartial, systemPrompt)
+            llm.generateResponse(prompt, onPartial)
         }
     }
 }

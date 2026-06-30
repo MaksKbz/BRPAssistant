@@ -383,12 +383,9 @@ class ChatViewModel @Inject constructor(
             val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
             val history = _state.value.messages
-            // FIX: используем ТОЛЬКО локальное состояние, а НЕ DataStore.
-            // Чтение chatForceOnline из DataStore давало race condition:
-            // selectOfflineLlm() очищает DataStore асинхронно, но sendMessage
-            // мог прочитать старое значение → forceRemote=true → локальная
-            // модель никогда не использовалась.
+            // Глобальный выбор модели: если в DataStore выбран онлайн — forceRemote.
             val forceRemote = _state.value.selectedOnlineProvider != null
+                || settingsRepository.chatForceOnline.first() != null
             var assistantContent = ""
             val assistantMsg = ChatMessage(content = "", role = MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }
