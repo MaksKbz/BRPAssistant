@@ -138,7 +138,8 @@ ${histBlock(history)}
         accessories: List<Accessory>,
         selectedModel: BrpModel?,
         history: List<ChatMessage>,
-        style: PromptStyle = PromptStyle.CHATML
+        style: PromptStyle = PromptStyle.CHATML,
+        customSystemPrompt: String = ""
     ): String {
         val modelCtx = selectedModel?.let { m ->
             "КЛИЕНТ: ${m.brand.uppercase()} ${m.modelName} (${m.modelYear}), платформа: ${m.platform ?: "N/A"}"
@@ -186,7 +187,8 @@ ${histBlock(history)}
         userMessage: String,
         models: List<BrpModel>,
         history: List<ChatMessage>,
-        style: PromptStyle = PromptStyle.CHATML
+        style: PromptStyle = PromptStyle.CHATML,
+        customSystemPrompt: String = ""
     ): String {
         val modelBlock = models.take(3).joinToString("\n\n") { m ->
             buildString {
