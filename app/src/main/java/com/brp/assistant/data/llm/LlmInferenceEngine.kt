@@ -213,11 +213,16 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // FIX краша: используем generateResponseAsync (ListenableFuture) вместо
-                        // синхронного generateResponse(). Блокирующий вызов вызывал
-                        // нативный SIGSEGV на некоторых .task моделях (Qwen2.5-0.5B).
-                        // ListenableFuture.get() в IO-диспетчере — стабильно.
-                        val future = inference.generateResponseAsync(prompt)
+                        // FIX: MediaPipe .task модели не поддерживают отдельный system
+                        // prompt. Поэтому сливаем systemPrompt в начало промпта, чтобы
+                        // контакты дилера и другие настройки дошли до модели.
+                        val fullPrompt = if (systemPrompt.isNotBlank()) {
+                            "$systemPrompt\n\n---\n\n$prompt"
+                        } else {
+                            prompt
+                        }
+                        // generateResponseAsync вместо синхронного — стабильно.
+                        val future = inference.generateResponseAsync(fullPrompt)
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             future.get()
                         }

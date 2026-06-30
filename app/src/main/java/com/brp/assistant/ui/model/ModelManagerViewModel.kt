@@ -51,6 +51,7 @@ data class ModelManagerState(
 
 @HiltViewModel
 class ModelManagerViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
     private val llmEngine: LlmInferenceEngine,
     private val downloader: PublicHuggingFaceModelDownloader,
     private val customModelManager: CustomModelManager,
@@ -123,28 +124,40 @@ class ModelManagerViewModel @Inject constructor(
     // FIX: загрузка в application-scope, НЕ viewModelScope.
     // Большие модели (3-5 ГБ) качаются долго; при уходе с экрана viewModelScope
     // отменял загрузку → прерывание. Теперь загрузка живёт до конца.
+    // ДОПОЛНИТЕЛЬНО: WakeLock不让屏幕休眠中断下载 (Doze mode прерывает coroutines).
     private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun downloadModel(model: OfflineModelInfo) {
         if (_state.value.downloadingModelId != null) return
         downloadJob?.cancel()
         downloadJob = downloadScope.launch {
-            _state.update { it.copy(downloadingModelId = model.id, error = null, downloadProgress = 0f) }
-            downloader.downloadModel(model).collect { downloadState ->
-                when (downloadState) {
-                    is ModelDownloadState.Progress -> {
-                        val progress = (downloadState.percent ?: 0).toFloat() / 100f
-                        _state.update { it.copy(downloadProgress = progress) }
-                    }
-                    is ModelDownloadState.Success -> {
-                        _state.update { it.copy(downloadingModelId = null, downloadProgress = 0f) }
-                        kotlinx.coroutines.delay(500)
-                        refreshModels()
-                    }
-                    is ModelDownloadState.Error -> {
-                        _state.update { it.copy(downloadingModelId = null, error = downloadState.message) }
+            // Partial WakeLock — CPU работает даже при выключенном экране (Doze).
+            val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            val wakeLock = powerManager.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "BRPAssistant::ModelDownload"
+            ).apply { acquire(30 * 60 * 1000L) } // 30 минут максимум
+
+            try {
+                _state.update { it.copy(downloadingModelId = model.id, error = null, downloadProgress = 0f) }
+                downloader.downloadModel(model).collect { downloadState ->
+                    when (downloadState) {
+                        is ModelDownloadState.Progress -> {
+                            val progress = (downloadState.percent ?: 0).toFloat() / 100f
+                            _state.update { it.copy(downloadProgress = progress) }
+                        }
+                        is ModelDownloadState.Success -> {
+                            _state.update { it.copy(downloadingModelId = null, downloadProgress = 0f) }
+                            kotlinx.coroutines.delay(500)
+                            refreshModels()
+                        }
+                        is ModelDownloadState.Error -> {
+                            _state.update { it.copy(downloadingModelId = null, error = downloadState.message) }
+                        }
                     }
                 }
+            } finally {
+                if (wakeLock.isHeld) wakeLock.release()
             }
         }
     }
