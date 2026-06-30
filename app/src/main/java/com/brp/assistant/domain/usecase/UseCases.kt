@@ -91,7 +91,7 @@ class DiagnoseUseCase @Inject constructor(
                     onPartial = onPartial
                 )
             } else {
-                llm.generateResponse(prompt, onPartial)
+                llm.generateResponse(prompt, onPartial, systemPrompt)
             }
 
             result.onSuccess { text ->
@@ -176,7 +176,7 @@ class ChatUseCase @Inject constructor(
                 onPartial = onPartial
             )
         } else {
-            llm.generateResponse(prompt, onPartial)
+            llm.generateResponse(prompt, onPartial, systemPrompt)
         }
     }
 }

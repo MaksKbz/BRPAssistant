@@ -52,14 +52,23 @@ class CustomModelManager @Inject constructor(
 
     suspend fun importFile(uri: Uri, fileName: String): Result<OfflineModelInfo> =
         withContext(Dispatchers.IO) {
-            // FIX #7: проверка расширения файла.
-            // MediaPipe принимает только .gguf и .bin — любой другой файл
-            // вызывает краш при инициализации LlmInference.createFromOptions().
+            // FIX: поддерживаем все форматы, которые умеют движки приложения.
             val lowerName = fileName.lowercase()
-            if (!lowerName.endsWith(".gguf") && !lowerName.endsWith(".bin")) {
+            val supportedExt = listOf(".task", ".tflite", ".litertlm", ".gguf", ".bin")
+            val ext = supportedExt.find { lowerName.endsWith(it) }
+            if (ext == null) {
                 return@withContext Result.failure(
-                    Exception("Неподдерживаемый формат файла. Используйте .gguf или .bin")
+                    Exception("Неподдерживаемый формат. Поддерживаются: ${supportedExt.joinToString(", ")}")
                 )
+            }
+
+            // Определяем формат и стиль промпта по расширению
+            val format = if (ext == ".litertlm") ModelFormat.LITERTLM else ModelFormat.TASK
+            val promptStyle = when {
+                lowerName.contains("qwen3") || lowerName.contains("qwen_3") -> PromptStyle.QWEN3
+                lowerName.contains("gemma") -> PromptStyle.GEMMA
+                lowerName.contains("phi") -> PromptStyle.PHI3
+                else -> PromptStyle.CHATML
             }
 
             try {
@@ -75,16 +84,24 @@ class CustomModelManager @Inject constructor(
                     }
                 } ?: return@withContext Result.failure(Exception("Не удалось открыть файл"))
 
+                val sizeMb = (outFile.length() / (1024 * 1024)).toInt()
+                val minRam = when {
+                    sizeMb < 500 -> 3
+                    sizeMb < 2000 -> 4
+                    else -> 6
+                }
+
                 val modelInfo = OfflineModelInfo(
                     id = id,
-                    title = "Пользовательская: $fileName",
+                    title = "📦 $fileName",
                     repoId = "custom",
                     filename = fileName,
                     license = "Custom",
-                    approxSizeMb = (outFile.length() / (1024 * 1024)).toInt(),
-                    minRamGb = 4,
-                    promptStyle = PromptStyle.CHATML,
-                    description = "Модель загружена пользователем из файла.",
+                    approxSizeMb = sizeMb,
+                    minRamGb = minRam,
+                    promptStyle = promptStyle,
+                    format = format,
+                    description = "Локальный файл: ${sizeMb} МБ. Формат: ${ext.drop(1)}.",
                     isCustom = true
                 )
 

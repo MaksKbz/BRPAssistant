@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SettingsEthernet
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -188,6 +189,29 @@ fun ModelManagerScreen(
             Text(
                 "Скачиваются напрямую как публичные файлы без API-ключей и без авторизации. Подходят для полностью офлайн-работы на телефоне.",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Кнопка импорта собственного файла модели (.task/.litertlm/.gguf/.bin)
+            val filePickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    val fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "model.task"
+                    onAddFromFile(uri, fileName)
+                }
+            }
+            OutlinedButton(
+                onClick = { filePickerLauncher.launch("*/*") },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Загрузить свой файл модели")
+            }
+            Text(
+                "Поддерживаются: .task, .litertlm, .tflite, .gguf, .bin",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
