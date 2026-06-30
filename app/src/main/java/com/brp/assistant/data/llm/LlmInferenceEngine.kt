@@ -47,16 +47,46 @@ class LlmInferenceEngine @Inject constructor(
         private const val TAG = "LlmInferenceEngine"
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
-
         private const val GENERATION_TIMEOUT_MS = 120_000L
-
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
 
-        // Dedicated single-thread executor for MediaPipe generation callbacks.
-        // ListenableFuture.addListener + .get() на том же потоке = deadlock.
-        // Этот executor изолирует callback от IO-диспетчера корутины.
         private val mediaPipeExecutor = Executors.newSingleThreadExecutor { r ->
             Thread(r, "MediaPipe-Gen").apply { isDaemon = true }
+        }
+
+        /**
+         * Очистка вывода от артефактов:
+         * - <think>...</think> теги (DeepSeek-R1, Qwen3 thinking mode)
+         * - BPE-артефакты (Ġ, â, ĺ и подобные мусорные токены)
+         * - Повторяющиеся строки
+         */
+        private fun cleanOutput(raw: String): String {
+            var result = raw
+
+            // Удаляем think-блоки
+            result = result.replace(Regex("(?s)<think>.*?</think>"), "")
+            result = result.replace(Regex("(?s)<think>.*"), "") // незакрытый think
+            result = result.replace("</think>", "")
+            result = result.replace("<think>", "")
+
+            // Удаляем BPE-артефакты (Ġ и подобные)
+            result = result.replace(Regex("Ġ+"), " ")
+            result = result.replace(Regex("[âĺĢĶ]+"), "")
+
+            // Удаляем дублирующиеся строки (repetition loop)
+            val lines = result.split("\n")
+            val deduped = mutableListOf<String>()
+            var lastLine = ""
+            for (line in lines) {
+                val trimmed = line.trim()
+                if (trimmed != lastLine || trimmed.isEmpty()) {
+                    deduped.add(line)
+                    lastLine = trimmed
+                }
+            }
+            result = deduped.joinToString("\n")
+
+            return result.trim()
         }
     }
 
@@ -228,7 +258,13 @@ class LlmInferenceEngine @Inject constructor(
                         // Синхронный generateResponse() вызывал SIGSEGV на крупных моделях.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             suspendCancellableCoroutine<String> { cont ->
-                                val future = inference.generateResponseAsync(prompt)
+                                // Добавляем systemPrompt в начало промпта для MediaPipe .task
+                        val finalPrompt = if (systemPrompt.isNotBlank()) {
+                            "Инструкции владельца:\n$systemPrompt\n\n$prompt"
+                        } else {
+                            prompt
+                        }
+                        val future = inference.generateResponseAsync(finalPrompt)
                                 future.addListener({
                                     try {
                                         if (future.isCancelled) {
@@ -247,8 +283,8 @@ class LlmInferenceEngine @Inject constructor(
                                 }
                             }
                         }
-                        withContext(Dispatchers.Main) { onPartial(response) }
-                        Result.success(response)
+                        withContext(Dispatchers.Main) { onPartial(cleanOutput(response)) }
+                        Result.success(cleanOutput(response))
                     } catch (e: TimeoutCancellationException) {
                         val msg = "⏱ Превышено время ожидания ответа (${GENERATION_TIMEOUT_MS / 1000}с). " +
                             "Попробуйте более короткий вопрос или лёгкую модель."
