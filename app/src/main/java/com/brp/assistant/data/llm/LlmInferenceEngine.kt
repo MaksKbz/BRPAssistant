@@ -213,11 +213,14 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // FIX: НЕ добавляем systemPrompt повторно.
-                        // PromptBuilder уже включает SYSTEM_PROMPT в промпт через
-                        // wrapWithStyle(). Раньше мы добавляли systemPrompt сверху —
-                        // промпт дублировался и превышал лимит токенов → пустой ответ.
-                        val future = inference.generateResponseAsync(prompt)
+                        // MediaPipe .task не поддерживает отдельный system prompt.
+                        // Добавляем его в начало промпта — РАБОЧАЯ схема из v2.6.0.
+                        val fullPrompt = if (systemPrompt.isNotBlank()) {
+                            "$systemPrompt\n\n$prompt"
+                        } else {
+                            prompt
+                        }
+                        val future = inference.generateResponseAsync(fullPrompt)
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
                             future.get()
                         }

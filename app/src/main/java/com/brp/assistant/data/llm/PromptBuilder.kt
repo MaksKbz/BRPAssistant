@@ -126,8 +126,7 @@ ${histBlock(history)}
 
 КЛИЕНТ: $userMessage"""
 
-        val combinedSystem = if (customSystemPrompt.isNotBlank()) SYSTEM_PROMPT + "\n\nДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n" + customSystemPrompt else SYSTEM_PROMPT
-        return wrapWithStyle(combinedSystem, content, style)
+        return wrapWithStyle(SYSTEM_PROMPT, content, style)
     }
 
     // ============================================================
@@ -176,8 +175,7 @@ ${histBlock(history)}
 4. Укажи если нужна установка у дилера
 5. Напомни про LinQ (tool-free установка)"""
 
-        val combinedSystem = if (customSystemPrompt.isNotBlank()) SYSTEM_PROMPT + "\n\nДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n" + customSystemPrompt else SYSTEM_PROMPT
-        return wrapWithStyle(combinedSystem, content, style)
+        return wrapWithStyle(SYSTEM_PROMPT, content, style)
     }
 
     // ============================================================
@@ -218,8 +216,7 @@ ${histBlock(history)}
 4. Упомяни NEW 2026 модели
 5. Объясни разницу двигателей (E-TEC vs ACE vs Turbo)"""
 
-        val combinedSystem = if (customSystemPrompt.isNotBlank()) SYSTEM_PROMPT + "\n\nДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n" + customSystemPrompt else SYSTEM_PROMPT
-        return wrapWithStyle(combinedSystem, content, style)
+        return wrapWithStyle(SYSTEM_PROMPT, content, style)
     }
 
     // ============================================================
@@ -279,8 +276,7 @@ ${histBlock(history)}
 
 ПРАВИЛО: Если техника выбрана, не предлагай решения для других брендов или моделей. Используй только предоставленные справочные данные."""
 
-        val combinedSystem = if (customSystemPrompt.isNotBlank()) SYSTEM_PROMPT + "\n\nДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n" + customSystemPrompt else SYSTEM_PROMPT
-        return wrapWithStyle(combinedSystem, content, style)
+        return wrapWithStyle(SYSTEM_PROMPT, content, style)
     }
 
     private fun wrapWithStyle(system: String, content: String, style: PromptStyle): String {
