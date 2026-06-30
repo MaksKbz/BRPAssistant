@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -93,6 +94,14 @@ fun ModelManagerScreen(
     var systemPromptInput by remember(state.aiSystemPrompt) { mutableStateOf(state.aiSystemPrompt) }
     var promptApplied by remember { mutableStateOf(false) }
     var showTestPrompt by remember { mutableStateOf(false) }
+    val filePickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "model.task"
+            onAddFromFile(uri, fileName)
+        }
+    }
 
     val providers = listOf("Gemini", "Groq (Cloud)")
     val geminiModels = listOf("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro")
@@ -192,15 +201,7 @@ fun ModelManagerScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Кнопка импорта собственного файла модели (.task/.litertlm/.gguf/.bin)
-            val filePickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
-            ) { uri: Uri? ->
-                if (uri != null) {
-                    val fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "model.task"
-                    onAddFromFile(uri, fileName)
-                }
-            }
+            // Кнопка импорта собственного файла модели
             OutlinedButton(
                 onClick = { filePickerLauncher.launch("*/*") },
                 modifier = Modifier.fillMaxWidth()
