@@ -60,6 +60,10 @@ data class ChatState(
     val currentMode: String? = null,
     val selectedLlmModelId: String? = null,
     val selectedOnlineProvider: String? = null,
+    // Прогресс скачивания модели прямо из чата
+    val chatDownloadModelId: String? = null,
+    val chatDownloadProgress: Float = 0f,
+    val chatDownloadError: String? = null,
     val allOfflineModels: List<OfflineModelUiItem> = emptyList(),
     val activeOfflineModelId: String? = null,
     val currentOnlineProvider: String = "Gemini",
@@ -80,6 +84,7 @@ class ChatViewModel @Inject constructor(
     private val summaryUseCase: ConversationSummaryUseCase,
     private val healthChecker: AppHealthChecker,
     private val deviceCapability: DeviceCapabilityProvider,
+    private val downloader: com.brp.assistant.data.llm.download.PublicHuggingFaceModelDownloader,
     /**
      * A3 — SavedStateHandle позволяет пережить гибель процесса Android (OOM-kill).
      * selectedSessionId и currentMode восстанавливаются автоматически.
@@ -333,11 +338,87 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectOfflineLlm(modelId: String?) {
-        viewModelScope.launch {
-            // Сбрасываем глобальный выбор онлайна — используем локальную модель
-            settingsRepository.setChatForceOnline(null)
+        if (modelId == null) {
+            viewModelScope.launch { settingsRepository.setChatForceOnline(null) }
+            _state.update { it.copy(selectedLlmModelId = null, selectedOnlineProvider = null) }
+            return
         }
+
+        val model = com.brp.assistant.data.llm.PublicOfflineModelCatalog.getById(modelId)
+            ?: run {
+                _state.update { it.copy(error = "Модель не найдена") }
+                return
+            }
+
+        // Сбрасываем онлайн
+        viewModelScope.launch { settingsRepository.setChatForceOnline(null) }
         _state.update { it.copy(selectedLlmModelId = modelId, selectedOnlineProvider = null) }
+
+        if (llmEngine.isModelDownloaded(model)) {
+            // Модель уже скачана → активируем автоматически
+            activateFromChat(model)
+        } else {
+            // Модель не скачана → скачиваем, потом активируем
+            downloadFromChat(model)
+        }
+    }
+
+    private fun activateFromChat(model: com.brp.assistant.data.llm.OfflineModelInfo) {
+        viewModelScope.launch {
+            _state.update { it.copy(error = "⏳ Активирую ${model.title}...") }
+            val result = llmEngine.initialize(model)
+            if (result.isSuccess) {
+                _state.update { it.copy(error = null, isModelReady = true) }
+            } else {
+                _state.update {
+                    it.copy(error = "Не удалось активировать: ${result.exceptionOrNull()?.message}")
+                }
+            }
+        }
+    }
+
+    private fun downloadFromChat(model: com.brp.assistant.data.llm.OfflineModelInfo) {
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    chatDownloadModelId = model.id,
+                    chatDownloadProgress = 0f,
+                    chatDownloadError = null,
+                    error = "⬇️ Скачиваю ${model.title}..."
+                )
+            }
+            try {
+                downloader.downloadModel(model).collect { state ->
+                    when (state) {
+                        is com.brp.assistant.data.llm.download.ModelDownloadState.Progress -> {
+                            val progress = (state.percent ?: 0).toFloat() / 100f
+                            _state.update { it.copy(chatDownloadProgress = progress) }
+                        }
+                        is com.brp.assistant.data.llm.download.ModelDownloadState.Success -> {
+                            _state.update {
+                                it.copy(chatDownloadModelId = null, chatDownloadProgress = 0f)
+                            }
+                            // Сразу активируем после скачивания
+                            activateFromChat(model)
+                        }
+                        is com.brp.assistant.data.llm.download.ModelDownloadState.Error -> {
+                            _state.update {
+                                it.copy(
+                                    chatDownloadModelId = null,
+                                    chatDownloadProgress = 0f,
+                                    chatDownloadError = state.message,
+                                    error = state.message
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(chatDownloadModelId = null, error = "Ошибка: ${e.message}")
+                }
+            }
+        }
     }
 
     fun selectOnlineLlm(provider: String) {
