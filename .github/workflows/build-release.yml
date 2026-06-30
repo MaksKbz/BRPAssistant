@@ -34,17 +34,16 @@ jobs:
       - name: List APK outputs
         run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'
 
-      - name: Sign APK with debug key
+      # STABLE SIGNING: используем единый release keystore из GitHub Secrets.
+      # Все сборки подписываются одним ключом → APK можно обновлять поверх
+      # старой версии без удаления. Загруженные модели сохраняются.
+      - name: Decode release keystore
         run: |
-          keytool -genkey -v \
-            -keystore debug.jks \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 \
-            -validity 10000 \
-            -storepass android \
-            -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > release.p12
+          echo "Keystore decoded: $(ls -lh release.p12)"
 
+      - name: Sign APK with stable release key
+        run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
           if [ -z "$APK" ]; then
             echo "ERROR: APK not found!"
@@ -54,10 +53,11 @@ jobs:
 
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
-            --ks debug.jks \
-            --ks-key-alias androiddebugkey \
-            --ks-pass pass:android \
-            --key-pass pass:android \
+            --ks release.p12 \
+            --ks-type PKCS12 \
+            --ks-key-alias "${{ secrets.RELEASE_KEY_ALIAS }}" \
+            --ks-pass "pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.RELEASE_KEY_PASSWORD }}" \
             --out app-release-signed.apk \
             "$APK"
 
@@ -69,10 +69,18 @@ jobs:
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose app-release-signed.apk
 
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unknown")
+          SHORT_SHA=${GITHUB_SHA::7}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BRPAssistant-release-${{ github.run_number }}
+          name: BRPAssistant-v${{ steps.version.outputs.version }}-release
           path: app-release-signed.apk
           retention-days: 30
 
@@ -87,9 +95,9 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Run: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Release APK v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ steps.version.outputs.short_sha }}" >> $GITHUB_STEP_SUMMARY
           APK=$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)
           if [ -n "$APK" ]; then
             SIZE=$(ls -lh "$APK" | awk '{print $5}')

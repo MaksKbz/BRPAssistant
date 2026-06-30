@@ -335,6 +335,11 @@ class LlmInferenceEngine @Inject constructor(
         val file = getModelFile(model)
         val partFile = File(file.parent, file.name + ".part")
         if (partFile.exists()) return false  // загрузка ещё идёт
+        // Для пользовательских моделей — проверяем только что файл > 1 МБ
+        // (approxSizeMb может быть неточным)
+        if (model.isCustom) {
+            return file.exists() && file.length() > 1024 * 1024
+        }
         val minSizeBytes = maxOf(
             FALLBACK_MIN_FILE_SIZE_BYTES,
             (model.approxSizeMb * 1024L * 1024L * 0.8).toLong()
