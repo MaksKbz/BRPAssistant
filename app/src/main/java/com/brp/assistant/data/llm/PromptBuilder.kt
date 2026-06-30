@@ -126,7 +126,12 @@ ${histBlock(history)}
 
 КЛИЕНТ: $userMessage"""
 
-        return wrapWithStyle(SYSTEM_PROMPT, content, style)
+        val finalContent = if (customSystemPrompt.isNotBlank()) {
+            "$content\n\nВАЖНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n$customSystemPrompt"
+        } else {
+            content
+        }
+        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
     }
 
     // ============================================================
@@ -175,7 +180,12 @@ ${histBlock(history)}
 4. Укажи если нужна установка у дилера
 5. Напомни про LinQ (tool-free установка)"""
 
-        return wrapWithStyle(SYSTEM_PROMPT, content, style)
+        val finalContent = if (customSystemPrompt.isNotBlank()) {
+            "$content\n\nВАЖНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n$customSystemPrompt"
+        } else {
+            content
+        }
+        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
     }
 
     // ============================================================
@@ -216,7 +226,12 @@ ${histBlock(history)}
 4. Упомяни NEW 2026 модели
 5. Объясни разницу двигателей (E-TEC vs ACE vs Turbo)"""
 
-        return wrapWithStyle(SYSTEM_PROMPT, content, style)
+        val finalContent = if (customSystemPrompt.isNotBlank()) {
+            "$content\n\nВАЖНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n$customSystemPrompt"
+        } else {
+            content
+        }
+        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
     }
 
     // ============================================================
@@ -276,7 +291,12 @@ ${histBlock(history)}
 
 ПРАВИЛО: Если техника выбрана, не предлагай решения для других брендов или моделей. Используй только предоставленные справочные данные."""
 
-        return wrapWithStyle(SYSTEM_PROMPT, content, style)
+        val finalContent = if (customSystemPrompt.isNotBlank()) {
+            "$content\n\nВАЖНЫЕ ДАННЫЕ ОТ ВЛАДЕЛЬЦА:\n$customSystemPrompt"
+        } else {
+            content
+        }
+        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
     }
 
     private fun wrapWithStyle(system: String, content: String, style: PromptStyle): String {
