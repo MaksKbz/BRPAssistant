@@ -8,8 +8,12 @@ import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -41,19 +45,19 @@ class LlmInferenceEngine @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LlmInferenceEngine"
-        private const val MAX_TOKENS = 2048
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
-        /**
-         * Максимальное время ожидания ответа от MediaPipe.
-         * 120 секунд — достаточно для генерации 1024 токенов даже на Helio G85,
-         * но защищает от бесконечного зависания при нативном дедлоке в JNI.
-         */
         private const val GENERATION_TIMEOUT_MS = 120_000L
 
-        /** Все поддерживаемые расширения — оба движка */
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
+
+        // Dedicated single-thread executor for MediaPipe generation callbacks.
+        // ListenableFuture.addListener + .get() на том же потоке = deadlock.
+        // Этот executor изолирует callback от IO-диспетчера корутины.
+        private val mediaPipeExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "MediaPipe-Gen").apply { isDaemon = true }
+        }
     }
 
     // ── MediaPipe движок (TASK) ──────────────────────────────────────────────
@@ -162,16 +166,22 @@ class LlmInferenceEngine @Inject constructor(
     }
 
     private fun tryInitMediaPipeWithCpuFallback(modelFile: File): Result<Unit> {
-        // FIX: НЕ устанавливаем setMaxTokens — модель сама знает свой лимит KV-cache
-        // из .task метаданных (ekv1280 = 1280 токенов, ekv4096 = 4096 токенов).
-        // Раньше setMaxTokens(2048) переполнял KV-cache моделей с ekv1280
-        // → "абракадабра" или нативный краш (SIGSEGV).
         return try {
+            // Парсим ekv (KV-cache размер) из имени файла:
+            //   ...ekv1280.task → 1280 токенов
+            //   ...ekv4096.task → 4096 токенов
+            // setMaxTokens ТРЕБУЕТСЯ MediaPipe для генерации. Без него — пустой ответ.
+            // Значение = размер KV-cache модели (вход + выход суммарно).
+            val fileName = modelFile.name.lowercase()
+            val ekvMatch = Regex("ekv(\\d+)").find(fileName)
+            val maxTokens = ekvMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1024
+
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
+                .setMaxTokens(maxTokens)
                 .build()
             mediaPipeInference = LlmInference.createFromOptions(context, options)
-            Log.i(TAG, "MediaPipe initialized: ${modelFile.name}")
+            Log.i(TAG, "MediaPipe initialized: ${modelFile.name} (maxTokens=$maxTokens)")
             Result.success(Unit)
         } catch (e: Throwable) {
             Log.e(TAG, "MediaPipe init failed for ${modelFile.name}", e)
@@ -212,16 +222,31 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // Возвращаемся к синхронному generateResponse — РАБОЧИЙ API.
-                        // generateResponseAsync (ListenableFuture.get) не работал в
-                        // MediaPipe 0.10.35 — future не завершался, ответ не поступал.
-                        // Синхронный вызов на Dispatchers.IO — проверено и стабильно.
+                        // ПРАВИЛЬНЫЙ async: generateResponseAsync + listener на
+                        // dedicated executor. Раньше .get() блокировал поток →
+                        // deadlock (callback должен был выполниться на том же потоке).
+                        // Синхронный generateResponse() вызывал SIGSEGV на крупных моделях.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
-                            inference.generateResponse(prompt)
+                            suspendCancellableCoroutine<String> { cont ->
+                                val future = inference.generateResponseAsync(prompt)
+                                future.addListener({
+                                    try {
+                                        if (future.isCancelled) {
+                                            cont.cancel()
+                                        } else {
+                                            val result = future.get()
+                                            cont.resume(result) {}
+                                        }
+                                    } catch (e: Throwable) {
+                                        cont.resumeWithException(e)
+                                    }
+                                }, mediaPipeExecutor)
+
+                                cont.invokeOnCancellation {
+                                    future.cancel(false)
+                                }
+                            }
                         }
-                        if (!isActive) return@withContext Result.failure(
-                            CancellationException("Генерация отменена")
-                        )
                         withContext(Dispatchers.Main) { onPartial(response) }
                         Result.success(response)
                     } catch (e: TimeoutCancellationException) {

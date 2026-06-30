@@ -608,15 +608,16 @@ private fun LlmSelectorSheet(
         } else {
             allOfflineModels.forEach { item ->
                 val subtitle = when {
-                    item.model.id == activeOfflineModelId -> "Активна"
-                    item.isDownloaded -> "Загружена"
-                    else -> "Не загружена — перейдите в раздел Модели"
+                    item.model.id == activeOfflineModelId -> "✅ Активна"
+                    item.isDownloaded -> "Загружена — нажмите для активации"
+                    else -> "⬇️ Не загружена — нажмите для скачивания"
                 }
+                // Все модели доступны для выбора (включая незагруженные)
                 LlmOptionRow(
                     label = item.model.title,
                     subtitle = subtitle,
                     isSelected = selectedLlmModelId == item.model.id,
-                    enabled = item.isDownloaded,
+                    enabled = true,
                     onClick = { onSelectOffline(item.model.id) }
                 )
             }
