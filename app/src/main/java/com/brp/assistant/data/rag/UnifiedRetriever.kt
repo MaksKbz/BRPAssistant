@@ -102,6 +102,7 @@ class UnifiedRetriever @Inject constructor(
                 filtered
                     .map { ScoredCard(it, scorer.scoreKnowledgeCard(query, it, selectedModel)) }
                     .sortedByDescending { it.score }
+                    .filter { it.score > 3f }
                     .take(topK)
             }
             RetrievalMode.ACCESSORY -> emptyList()
@@ -124,6 +125,7 @@ class UnifiedRetriever @Inject constructor(
                     }
                     .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
                     .sortedByDescending { it.score }
+                    .filter { it.score > 5f }
                     .take(topK)
             }
             RetrievalMode.DIAGNOSIS -> emptyList()
