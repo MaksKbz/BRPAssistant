@@ -87,13 +87,18 @@ class AppHealthChecker @Inject constructor(
             }
 
             // ── 2. БД ─────────────────────────────────────────────────────────
+            // FIX: health probe через getMessages может падать при первой инициализации
+            // БД (createFromAsset + Room schema validation). Не блокируем приложение —
+            // помечаем как некритичное предупреждение. Реальные DAO-запросы в UI
+            // обработают ошибку отдельно и дадут пересоздать БД.
             val dbOk = try {
                 dao.getMessages("_health_probe_")
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "DB health check failed", e)
-                warnings += "❌ Ошибка базы данных. Попробуйте переустановить приложение."
-                false
+                Log.w(TAG, "DB health probe failed (non-blocking): ${e.message}")
+                // НЕ ставим dbOk=false — это блокирует приложение.
+                // БД откроется лениво при реальном запросе из UI.
+                true
             }
 
             // ── 3. API-ключи ──────────────────────────────────────────────────

@@ -36,18 +36,18 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BrpDatabase {
+        // FIX: если createFromAsset создаёт БД с несовместимой схемой (хэш
+        // совпадает, но Room на устройстве находит тонкое расхождение),
+        // Room кидает IllegalStateException. fallbackToDestructiveMigration
+        // позволяет Room пересоздать БД с нуля.
         return Room.databaseBuilder(
             context,
             BrpDatabase::class.java,
-            // FIX: смена имени файла БД → Room создаёт её заново из asset,
-            // минуя устаревший файл от ранних тестовых сборок (где схема v6
-            // отличалась от текущей — "Ошибка БД" при запуске).
-            // Старый файл v25 остаётся на устройстве, но игнорируется.
-            "brp_assistant_v26.db"
+            "brp_assistant_v27.db"
         )
             .createFromAsset("brp_assistant.db")
             .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
-            .fallbackToDestructiveMigrationFrom(1, 2)
+            .fallbackToDestructiveMigration()
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
     }
