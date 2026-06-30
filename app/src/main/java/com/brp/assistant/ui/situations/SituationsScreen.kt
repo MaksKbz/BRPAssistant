@@ -89,6 +89,16 @@ fun SituationsScreen(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
+                } else if (displayCategories.isEmpty()) {
+                    // FIX: если нет категорий для выбранной техники — не крашим
+                    // ScrollableTabRow с 0 табов, а показываем сообщение
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Нет инструкций для выбранной техники.\nВыберите технику или сбросьте фильтр.",
+                            fontSize = 14.sp, color = Color.Gray,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
                 } else {
                     ScrollableTabRow(
                         selectedTabIndex = displayCategories.indexOf(selectedCategory).coerceAtLeast(0),
@@ -211,8 +221,13 @@ fun DetailSection(title: String, jsonArrayStr: String, isWarning: Boolean = fals
     Column {
         Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (isWarning) MaterialTheme.colorScheme.error else Color.Unspecified)
         val list = try {
-            Json.parseToJsonElement(jsonArrayStr).jsonArray.map { it.jsonPrimitive.content }
+            if (jsonArrayStr.isBlank()) {
+                emptyList()
+            } else {
+                Json.parseToJsonElement(jsonArrayStr).jsonArray.map { it.jsonPrimitive.content }
+            }
         } catch (e: Exception) {
+            // Если данные в БД — не JSON массив, а обычный текст — показываем как есть
             listOf(jsonArrayStr)
         }
         list.forEach { item ->
