@@ -41,7 +41,7 @@ class LlmInferenceEngine @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LlmInferenceEngine"
-        private const val MAX_TOKENS = 1024
+        private const val MAX_TOKENS = 2048
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
 
@@ -213,13 +213,12 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // FIX краша: используем generateResponseAsync (ListenableFuture) вместо
-                        // синхронного generateResponse(). Блокирующий вызов вызывал
-                        // нативный SIGSEGV на некоторых .task моделях (Qwen2.5-0.5B).
-                        // ListenableFuture.get() в IO-диспетчере — стабильно.
-                        val future = inference.generateResponseAsync(prompt)
+                        // Возвращаемся к синхронному generateResponse — РАБОЧИЙ API.
+                        // generateResponseAsync (ListenableFuture.get) не работал в
+                        // MediaPipe 0.10.35 — future не завершался, ответ не поступал.
+                        // Синхронный вызов на Dispatchers.IO — проверено и стабильно.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
-                            future.get()
+                            inference.generateResponse(prompt)
                         }
                         if (!isActive) return@withContext Result.failure(
                             CancellationException("Генерация отменена")
