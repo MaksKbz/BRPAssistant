@@ -5,7 +5,6 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# Разрешаем workflow создавать/обновлять Releases и загружать assets
 permissions:
   contents: write
 
@@ -17,6 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Нужен token с правами push, чтобы коммит версии прошёл на main
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -32,15 +34,48 @@ jobs:
         with:
           gradle-version: '8.13'
 
+      # ── Авто-бамп патч-версии ────────────────────────────────────────────
+      # Читает versionName и versionCode из build.gradle.kts,
+      # поднимает патч-часть и versionCode на 1,
+      # записывает обратно и пушит коммит со скипом CI.
+      - name: Bump patch version
+        id: bump
+        run: |
+          GRADLE=app/build.gradle.kts
+
+          # Читаем текущую версию
+          OLD_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$GRADLE")
+          OLD_CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$GRADLE")
+
+          # Разбиваем major.minor.patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_NAME"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_NAME="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          NEW_CODE=$((OLD_CODE + 1))
+
+          echo "🔼 Версия: $OLD_NAME → $NEW_NAME  |  versionCode: $OLD_CODE → $NEW_CODE"
+
+          # Седой заменяем в файле
+          sed -i "s/versionName = \"${OLD_NAME}\"/versionName = \"${NEW_NAME}\"/" "$GRADLE"
+          sed -i "s/versionCode = ${OLD_CODE}/versionCode = ${NEW_CODE}/" "$GRADLE"
+
+          # Пушим коммит обратно в main
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$GRADLE"
+          git commit -m "chore: bump version $OLD_NAME → $NEW_NAME (versionCode $NEW_CODE) [skip ci]"
+          git push
+
+          echo "new_version=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "new_code=$NEW_CODE"    >> $GITHUB_OUTPUT
+
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace --no-daemon
 
       - name: List APK outputs
         run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'
 
-      # STABLE SIGNING: используем единый release keystore из GitHub Secrets.
-      # Все сборки подписываются одним ключом → APK можно обновлять поверх
-      # старой версии без удаления. Загруженные модели сохраняются.
+      # STABLE SIGNING
       - name: Decode release keystore
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > release.p12
@@ -49,11 +84,7 @@ jobs:
       - name: Sign APK with stable release key
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK not found!"
-            exit 1
-          fi
-          echo "Signing: $APK"
+          if [ -z "$APK" ]; then echo "ERROR: APK not found!"; exit 1; fi
 
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
@@ -64,8 +95,6 @@ jobs:
             --key-pass "pass:${{ secrets.RELEASE_KEY_PASSWORD }}" \
             --out app-release-signed.apk \
             "$APK"
-
-          echo "=== Signed APK ==="
           ls -lh app-release-signed.apk
 
       - name: Verify APK
@@ -73,36 +102,19 @@ jobs:
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose app-release-signed.apk
 
-      - name: Get version
-        id: version
+      - name: Rename APK
         run: |
-          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unknown")
-          SHORT_SHA=${GITHUB_SHA::7}
-          BUILD_NUM=${{ github.run_number }}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          echo "build_number=$BUILD_NUM" >> $GITHUB_OUTPUT
-
-      # Формат имени: BRPAssistant-v2.8.2-build051-a974c39.apk
-      # • v2.8.2      — versionName из build.gradle.kts
-      # • build051    — номер сборки (GITHUB_RUN_NUMBER, автоинкремент, не повторяется)
-      # • a974c39     — короткий SHA коммита
-      - name: Rename APK for release
-        run: |
-          BUILD_NUM=$(printf "%03d" ${{ steps.version.outputs.build_number }})
           mv app-release-signed.apk \
-            BRPAssistant-v${{ steps.version.outputs.version }}-build${BUILD_NUM}-${{ steps.version.outputs.short_sha }}.apk
+            BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
 
-      # ── Публикация в GitHub Releases ──────────────────────────────────────
+      # ── Публикация в GitHub Releases ───────────────────────────────────
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: "BRPAssistant v${{ steps.version.outputs.version }}"
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          name: "BRPAssistant v${{ steps.bump.outputs.new_version }}"
           body: |
-            ## BRPAssistant v${{ steps.version.outputs.version }}
-
-            **Сборка #${{ steps.version.outputs.build_number }}** • Коммит: `${{ steps.version.outputs.short_sha }}`
+            ## BRPAssistant v${{ steps.bump.outputs.new_version }}
 
             ${{ github.event.head_commit.message }}
 
@@ -114,7 +126,7 @@ jobs:
             ### Требования
             - Android 11+ (API 30)
             - 2 ГБ RAM минимум (рекомендуется 4+ ГБ для офлайн-моделей)
-          files: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ format('{0:03}', steps.version.outputs.build_number) }}-${{ steps.version.outputs.short_sha }}.apk
+          files: BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
           make_latest: true
           generate_release_notes: false
           prerelease: false
@@ -124,8 +136,8 @@ jobs:
       - name: Upload APK artifact (backup, 30 дней)
         uses: actions/upload-artifact@v4
         with:
-          name: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ steps.version.outputs.build_number }}-release
-          path: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ format('{0:03}', steps.version.outputs.build_number) }}-${{ steps.version.outputs.short_sha }}.apk
+          name: BRPAssistant-v${{ steps.bump.outputs.new_version }}-release
+          path: BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
           retention-days: 30
 
       - name: Upload ProGuard mapping
@@ -139,16 +151,12 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          BUILD_NUM=$(printf "%03d" ${{ steps.version.outputs.build_number }})
-          APK_NAME="BRPAssistant-v${{ steps.version.outputs.version }}-build${BUILD_NUM}-${{ steps.version.outputs.short_sha }}.apk"
-          echo "### ✅ Release APK v${{ steps.version.outputs.version }} • build #${{ steps.version.outputs.build_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build:** #${{ steps.version.outputs.build_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** \`${{ steps.version.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **APK name:** \`${APK_NAME}\`" >> $GITHUB_STEP_SUMMARY
-          if [ -f "$APK_NAME" ]; then
-            SIZE=$(ls -lh "$APK_NAME" | awk '{print $5}')
+          echo "### ✅ Release APK v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **versionCode:** ${{ steps.bump.outputs.new_code }}" >> $GITHUB_STEP_SUMMARY
+          APK="BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk"
+          if [ -f "$APK" ]; then
+            SIZE=$(ls -lh "$APK" | awk '{print $5}')
             echo "- **APK size:** $SIZE" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "📦 Скачать: https://github.com/${{ github.repository }}/releases/latest" >> $GITHUB_STEP_SUMMARY
