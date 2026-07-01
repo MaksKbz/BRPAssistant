@@ -47,46 +47,16 @@ class LlmInferenceEngine @Inject constructor(
         private const val TAG = "LlmInferenceEngine"
         private const val DEFAULT_TEMP = 0.7f
         private const val FALLBACK_MIN_FILE_SIZE_BYTES = 10L * 1024 * 1024
+
         private const val GENERATION_TIMEOUT_MS = 120_000L
+
         private val SUPPORTED_EXTENSIONS = setOf("task", "tflite", "litertlm")
 
+        // Dedicated single-thread executor for MediaPipe generation callbacks.
+        // ListenableFuture.addListener + .get() на том же потоке = deadlock.
+        // Этот executor изолирует callback от IO-диспетчера корутины.
         private val mediaPipeExecutor = Executors.newSingleThreadExecutor { r ->
             Thread(r, "MediaPipe-Gen").apply { isDaemon = true }
-        }
-
-        /**
-         * Очистка вывода от артефактов:
-         * - <think>...</think> теги (DeepSeek-R1, Qwen3 thinking mode)
-         * - BPE-артефакты (Ġ, â, ĺ и подобные мусорные токены)
-         * - Повторяющиеся строки
-         */
-        private fun cleanOutput(raw: String): String {
-            var result = raw
-
-            // Удаляем think-блоки
-            result = result.replace(Regex("(?s)<think>.*?</think>"), "")
-            result = result.replace(Regex("(?s)<think>.*"), "") // незакрытый think
-            result = result.replace("</think>", "")
-            result = result.replace("<think>", "")
-
-            // Удаляем BPE-артефакты (Ġ и подобные)
-            result = result.replace(Regex("Ġ+"), " ")
-            result = result.replace(Regex("[âĺĢĶ]+"), "")
-
-            // Удаляем дублирующиеся строки (repetition loop)
-            val lines = result.split("\n")
-            val deduped = mutableListOf<String>()
-            var lastLine = ""
-            for (line in lines) {
-                val trimmed = line.trim()
-                if (trimmed != lastLine || trimmed.isEmpty()) {
-                    deduped.add(line)
-                    lastLine = trimmed
-                }
-            }
-            result = deduped.joinToString("\n")
-
-            return result.trim()
         }
     }
 
@@ -252,39 +222,17 @@ class LlmInferenceEngine @Inject constructor(
                 withContext(Dispatchers.IO) {
                     _isGenerating.set(true)
                     try {
-                        // ПРАВИЛЬНЫЙ async: generateResponseAsync + listener на
-                        // dedicated executor. Раньше .get() блокировал поток →
-                        // deadlock (callback должен был выполниться на том же потоке).
-                        // Синхронный generateResponse() вызывал SIGSEGV на крупных моделях.
+                        // Синхронный generateResponse на Dispatchers.IO — самый
+                        // надёжный способ для MediaPipe .task моделей.
+                        // Async (ListenableFuture) в MediaPipe 0.10.35 нестабилен:
+                        // callback не вызывается / deadlock / молчаливый провал.
                         val response = withTimeout(GENERATION_TIMEOUT_MS) {
-                            suspendCancellableCoroutine<String> { cont ->
-                                // Добавляем systemPrompt в начало промпта для MediaPipe .task
-                        val finalPrompt = if (systemPrompt.isNotBlank()) {
-                            "Инструкции владельца:\n$systemPrompt\n\n$prompt"
-                        } else {
-                            prompt
+                            inference.generateResponse(prompt)
                         }
-                        val future = inference.generateResponseAsync(finalPrompt)
-                                future.addListener({
-                                    try {
-                                        if (future.isCancelled) {
-                                            cont.cancel()
-                                        } else {
-                                            val result = future.get()
-                                            cont.resume(result) {}
-                                        }
-                                    } catch (e: Throwable) {
-                                        cont.resumeWithException(e)
-                                    }
-                                }, mediaPipeExecutor)
-
-                                cont.invokeOnCancellation {
-                                    future.cancel(false)
-                                }
-                            }
-                        }
-                        withContext(Dispatchers.Main) { onPartial(cleanOutput(response)) }
-                        Result.success(cleanOutput(response))
+                        // Очистка вывода: убираем <think> блоки и BPE-мусор
+                        val cleaned = cleanModelOutput(response)
+                        withContext(Dispatchers.Main) { onPartial(cleaned) }
+                        Result.success(cleaned)
                     } catch (e: TimeoutCancellationException) {
                         val msg = "⏱ Превышено время ожидания ответа (${GENERATION_TIMEOUT_MS / 1000}с). " +
                             "Попробуйте более короткий вопрос или лёгкую модель."
@@ -320,6 +268,41 @@ class LlmInferenceEngine @Inject constructor(
 
     fun getActivePromptStyle(): PromptStyle =
         activeModelInfo?.promptStyle ?: PromptStyle.CHATML
+
+    /**
+     * Очистка вывода LLM от артефактов:
+     * - <think>...</think> блоки (DeepSeek R1 reasoning)
+     * - BPE byte-level токены (Ġ, âĤĮ и подобные)
+     * - Дублирующие пробелы и пустые строки
+     */
+    private fun cleanModelOutput(raw: String): String {
+        var result = raw
+
+        // 1. Удаляем <think>...</think> блоки целиком
+        result = result.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+        // Одинокие теги (незакрытые)
+        result = result.replace(Regex("</?think>", RegexOption.IGNORE_CASE), "")
+
+        // 2. Удаляем BPE byte-level токены
+        result = result.replace(Regex("[\\u0120\\u0100\\u0101]"), "") // Ġ, Ā, ā
+        // Удаляем sequences типа âĤ, âĤĪ, ĠâĤł (BPE артефакты)
+        result = result.replace(Regex("â[\\u0124-\\u013F]+"), "")
+        result = result.replace(Regex("Ġ[â\\u0124-\\u013F]+"), "")
+
+        // 3. Удаляем спецсимволы CHATML которые модель может выдать
+        result = result.replace("<|im_start|>", "")
+            .replace("<|im_end|>", "")
+            .replace("<|end|>", "")
+            .replace("<|assistant|>", "")
+            .replace("<|system|>", "")
+            .replace("<|user|>", "")
+
+        // 4. Схлопываем множественные пробелы и пустые строки
+        result = result.replace(Regex(" {3,}"), "  ")
+        result = result.replace(Regex("\n{3,}"), "\n\n")
+
+        return result.trim()
+    }
 
     // ── Жизненный цикл ──────────────────────────────────────────────────
 

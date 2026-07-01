@@ -13,6 +13,22 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import javax.inject.Inject
 
+/**
+ * Определяет, является ли вопрос простым (приветствие, общение) — для таких
+ * вопросов RAG-контекст не нужен и только путает маленькие модели.
+ */
+private fun isSimpleQuestion(message: String): Boolean {
+    val lower = message.trim().lowercase()
+    if (lower.length > 60) return false
+    val triggers = listOf(
+        "привет", "здравств", "хай", "hello", "hi", "помоги", "можешь помочь",
+        "кто ты", "что ты умеешь", "что ты можешь", "как тебя зовут",
+        "телефон", "контакт", "адрес", "как связаться", "дилер",
+        "спасибо", "благодар", "ок", "понятно", "отлично", "хорошо"
+    )
+    return triggers.any { lower.contains(it) }
+}
+
 class DiagnoseUseCase @Inject constructor(
     private val retriever: UnifiedRetriever,
     private val promptBuilder: PromptBuilder,
@@ -56,8 +72,13 @@ class DiagnoseUseCase @Inject constructor(
             }
 
             val brpModel = vehicleId?.let { modelRepository.getById(it) }
-            val retrieval = retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId)
-            val cards = retrieval.cards.map { it.card }
+
+            // RAG: пропускаем retrieve для простых вопросов — контекст только путает модели
+            val cards = if (isSimpleQuestion(message)) {
+                emptyList()
+            } else {
+                retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId).cards.map { it.card }
+            }
 
             if (cards.any { it.symptom.contains(message, ignoreCase = true) }) {
                 val bestMatch = cards.first { it.symptom.contains(message, ignoreCase = true) }
@@ -136,8 +157,6 @@ class ChatUseCase @Inject constructor(
         val systemPrompt = settingsRepository.aiSystemPrompt.first()
         val temperature = settingsRepository.aiTemperature.first()
 
-        // Роутинг: forceRemote (ручной выбор онлайна) имеет приоритет.
-        // Иначе — локальная модель если готова, онлайн как фолбэк.
         val localReady = llm.isReady()
         val useRemote = forceRemote || (!localReady && !apiKey.isNullOrBlank())
 
@@ -152,10 +171,13 @@ class ChatUseCase @Inject constructor(
             ))
         }
 
-        val retrieval = retriever.retrieve(message, mode, vehicleId)
-        val cards = retrieval.cards.map { it.card }
-        val accessories = retrieval.accessories.map { it.accessory }
         val brpModel = vehicleId?.let { modelRepository.getById(it) }
+
+        // RAG: пропускаем для простых вопросов (приветствия, контакты дилера)
+        // — контекст только путает маленькие модели и забивает контекст
+        val simple = isSimpleQuestion(message)
+        val cards = if (simple) emptyList() else retriever.retrieve(message, mode, vehicleId).cards.map { it.card }
+        val accessories = if (simple) emptyList() else retriever.retrieve(message, mode, vehicleId).accessories.map { it.accessory }
 
         val prompt = promptBuilder.buildFreeChatPrompt(
             userMessage = message,
@@ -164,7 +186,7 @@ class ChatUseCase @Inject constructor(
             accessories = accessories,
             selectedModel = brpModel,
             style = llm.getActivePromptStyle(),
-                customSystemPrompt = systemPrompt
+            customSystemPrompt = systemPrompt
         )
 
         return if (useRemote) {
