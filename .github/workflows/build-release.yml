@@ -78,19 +78,22 @@ jobs:
         run: |
           VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unknown")
           SHORT_SHA=${GITHUB_SHA::7}
+          BUILD_NUM=${{ github.run_number }}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUM" >> $GITHUB_OUTPUT
 
+      # Формат имени: BRPAssistant-v2.8.2-build051-a974c39.apk
+      # • v2.8.2      — versionName из build.gradle.kts
+      # • build051    — номер сборки (GITHUB_RUN_NUMBER, автоинкремент, не повторяется)
+      # • a974c39     — короткий SHA коммита
       - name: Rename APK for release
         run: |
+          BUILD_NUM=$(printf "%03d" ${{ steps.version.outputs.build_number }})
           mv app-release-signed.apk \
-            BRPAssistant-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}.apk
+            BRPAssistant-v${{ steps.version.outputs.version }}-build${BUILD_NUM}-${{ steps.version.outputs.short_sha }}.apk
 
       # ── Публикация в GitHub Releases ──────────────────────────────────────
-      # Создаёт/обновляет тег vX.Y.Z и прикрепляет подписанный APK.
-      # update_latest: true → тег "latest" всегда указывает на свежую сборку.
-      # make_latest: true  → этот release помечается как Latest на странице Releases.
-      # При повторном push с той же versionName тег перезаписывается (force_tag: true).
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -99,7 +102,9 @@ jobs:
           body: |
             ## BRPAssistant v${{ steps.version.outputs.version }}
 
-            **Коммит:** `${{ steps.version.outputs.short_sha }}` — ${{ github.event.head_commit.message }}
+            **Сборка #${{ steps.version.outputs.build_number }}** • Коммит: `${{ steps.version.outputs.short_sha }}`
+
+            ${{ github.event.head_commit.message }}
 
             ### Установка
             1. Скачайте APK ниже
@@ -109,10 +114,9 @@ jobs:
             ### Требования
             - Android 11+ (API 30)
             - 2 ГБ RAM минимум (рекомендуется 4+ ГБ для офлайн-моделей)
-          files: BRPAssistant-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}.apk
+          files: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ format('{0:03}', steps.version.outputs.build_number) }}-${{ steps.version.outputs.short_sha }}.apk
           make_latest: true
           generate_release_notes: false
-          # Перезаписывает существующий тег при повторном push с той же версией
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,8 +124,8 @@ jobs:
       - name: Upload APK artifact (backup, 30 дней)
         uses: actions/upload-artifact@v4
         with:
-          name: BRPAssistant-v${{ steps.version.outputs.version }}-release
-          path: BRPAssistant-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}.apk
+          name: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ steps.version.outputs.build_number }}-release
+          path: BRPAssistant-v${{ steps.version.outputs.version }}-build${{ format('{0:03}', steps.version.outputs.build_number) }}-${{ steps.version.outputs.short_sha }}.apk
           retention-days: 30
 
       - name: Upload ProGuard mapping
@@ -135,13 +139,15 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "### ✅ Release APK v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          BUILD_NUM=$(printf "%03d" ${{ steps.version.outputs.build_number }})
+          APK_NAME="BRPAssistant-v${{ steps.version.outputs.version }}-build${BUILD_NUM}-${{ steps.version.outputs.short_sha }}.apk"
+          echo "### ✅ Release APK v${{ steps.version.outputs.version }} • build #${{ steps.version.outputs.build_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build:** #${{ steps.version.outputs.build_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** \`${{ steps.version.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Release:** https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          APK="BRPAssistant-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}.apk"
-          if [ -f "$APK" ]; then
-            SIZE=$(ls -lh "$APK" | awk '{print $5}')
+          echo "- **APK name:** \`${APK_NAME}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$APK_NAME" ]; then
+            SIZE=$(ls -lh "$APK_NAME" | awk '{print $5}')
             echo "- **APK size:** $SIZE" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
