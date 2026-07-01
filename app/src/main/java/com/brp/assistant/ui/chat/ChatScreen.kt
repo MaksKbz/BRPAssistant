@@ -609,12 +609,17 @@ private fun LlmSelectorSheet(
             allOfflineModels.forEach { item ->
                 val subtitle = when {
                     item.model.id == activeOfflineModelId -> "✅ Активна"
-                    item.isDownloaded -> "Загружена — нажмите для активации"
+                    item.isDownloaded -> "💾 Загружена — нажмите для активации"
                     else -> "⬇️ Не загружена — нажмите для скачивания"
+                }
+                val icon = when {
+                    item.model.id == activeOfflineModelId -> "✅"
+                    item.isDownloaded -> "💾"
+                    else -> "⬇️"
                 }
                 // Все модели доступны для выбора (включая незагруженные)
                 LlmOptionRow(
-                    label = item.model.title,
+                    label = "$icon ${item.model.title}",
                     subtitle = subtitle,
                     isSelected = selectedLlmModelId == item.model.id,
                     enabled = true,

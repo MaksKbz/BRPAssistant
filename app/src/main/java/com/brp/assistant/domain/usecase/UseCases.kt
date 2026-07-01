@@ -73,8 +73,9 @@ class DiagnoseUseCase @Inject constructor(
 
             val brpModel = vehicleId?.let { modelRepository.getById(it) }
 
-            // RAG: пропускаем retrieve для простых вопросов — контекст только путает модели
-            val cards = if (isSimpleQuestion(message)) {
+            // RAG: пропускаем для простых вопросов и для ЛОКАЛЬНЫХ моделей
+            val simple = isSimpleQuestion(message)
+            val cards = if (simple || !useRemote) {
                 emptyList()
             } else {
                 retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId).cards.map { it.card }
@@ -93,6 +94,26 @@ class DiagnoseUseCase @Inject constructor(
                 return@flow
             }
 
+            // ЛОКАЛЬНАЯ: ультра-простой промпт (как в ChatUseCase)
+            if (!useRemote) {
+                val localPrompt = promptBuilder.buildLocalChatPrompt(
+                    userMessage = message,
+                    selectedModel = brpModel,
+                    customSystemPrompt = systemPrompt
+                )
+                val localResult = llm.generateResponse(localPrompt, onPartial)
+                localResult.onSuccess { text ->
+                    emit(Result.success(DiagnosisResult(
+                        message = text,
+                        riskLevel = "low",
+                        sources = emptyList(),
+                        requiresEvacuation = false
+                    )))
+                }.onFailure { emit(Result.failure(it)) }
+                return@flow
+            }
+
+            // ОНЛАЙН: полный промпт с RAG
             val prompt = promptBuilder.buildDiagnosisPrompt(
                 userMessage = message,
                 cards = cards,
@@ -102,19 +123,15 @@ class DiagnoseUseCase @Inject constructor(
                 customSystemPrompt = systemPrompt
             )
 
-            val result = if (useRemote) {
-                remoteLlm.generateResponse(
-                    prompt = prompt,
-                    provider = provider,
-                    modelName = modelName,
-                    apiKey = apiKey!!,
-                    systemPrompt = systemPrompt,
-                    temperature = temperature,
-                    onPartial = onPartial
-                )
-            } else {
-                llm.generateResponse(prompt, onPartial, systemPrompt)
-            }
+            val result = remoteLlm.generateResponse(
+                prompt = prompt,
+                provider = provider,
+                modelName = modelName,
+                apiKey = apiKey!!,
+                systemPrompt = systemPrompt,
+                temperature = temperature,
+                onPartial = onPartial
+            )
 
             result.onSuccess { text ->
                 val maxRisk = cards.maxOfOrNull {
@@ -173,11 +190,22 @@ class ChatUseCase @Inject constructor(
 
         val brpModel = vehicleId?.let { modelRepository.getById(it) }
 
-        // RAG: пропускаем для простых вопросов (приветствия, контакты дилера)
-        // — контекст только путает маленькие модели и забивает контекст
-        val simple = isSimpleQuestion(message)
-        val cards = if (simple) emptyList() else retriever.retrieve(message, mode, vehicleId).cards.map { it.card }
-        val accessories = if (simple) emptyList() else retriever.retrieve(message, mode, vehicleId).accessories.map { it.accessory }
+        // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: ультра-простой промпт без RAG/заголовков.
+        // Маленькие модели не справляются со сложным промптом → галлюцинации.
+        // RAG-контекст и сложная разметка — только для онлайн.
+        if (!useRemote) {
+            val localPrompt = promptBuilder.buildLocalChatPrompt(
+                userMessage = message,
+                selectedModel = brpModel,
+                customSystemPrompt = systemPrompt
+            )
+            return llm.generateResponse(localPrompt, onPartial)
+        }
+
+        // ОНЛАЙН: полный промпт с RAG
+        val retrieval = retriever.retrieve(message, mode, vehicleId)
+        val cards = retrieval.cards.map { it.card }
+        val accessories = retrieval.accessories.map { it.accessory }
 
         val prompt = promptBuilder.buildFreeChatPrompt(
             userMessage = message,
@@ -189,18 +217,14 @@ class ChatUseCase @Inject constructor(
             customSystemPrompt = systemPrompt
         )
 
-        return if (useRemote) {
-            remoteLlm.generateResponse(
-                prompt = prompt,
-                provider = provider,
-                modelName = modelName,
-                apiKey = apiKey!!,
-                systemPrompt = systemPrompt,
-                temperature = temperature,
-                onPartial = onPartial
-            )
-        } else {
-            llm.generateResponse(prompt, onPartial, systemPrompt)
-        }
+        return remoteLlm.generateResponse(
+            prompt = prompt,
+            provider = provider,
+            modelName = modelName,
+            apiKey = apiKey!!,
+            systemPrompt = systemPrompt,
+            temperature = temperature,
+            onPartial = onPartial
+        )
     }
 }

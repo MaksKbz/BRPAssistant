@@ -8,17 +8,10 @@ import com.brp.assistant.domain.model.ChatMessage
 class PromptBuilder {
 
     companion object {
-        // FIX: сокращённый промпт для экономии контекста.
-        // Старый (1458 символов) переполнял KV-cache моделей ekv1280 → мусор/краш.
-        // Ключевые правила сохранены, детали убраны (модель знает BRP из обучения).
-        private const val SYSTEM_PROMPT = """Ты — BRP Assistant: эксперт по технике BRP (Can-Am, Ski-Doo, Sea-Doo, Lynx).
-
-ПРАВИЛА:
-1. ВСЕГДА отвечай ТОЛЬКО на русском языке
-2. Отвечай по данным каталогов и базы знаний
-3. Для аксессуаров указывай SKU, описание, цену и совместимость
-4. Для ремонта давай пошаговые инструкции с предупреждениями
-5. При недостатке данных рекомендуй обратиться к дилеру BRP"""
+        // FIX: ультра-короткий промпт для маленьких офлайн-моделей.
+        // Маленькие квантизованные модели (0.5B-1.5B) не справляются с длинными
+        // инструкциями и начинают галлюцинировать. Минимум текста.
+        private const val SYSTEM_PROMPT = """Ты BRP-ассистент. Отвечай кратко на русском."""
 
         /**
          * FIX #oom-guard: ограничения контекста для защиты от OOM.
@@ -301,6 +294,32 @@ ${histBlock(history)}
                 "<start_of_turn>user\n$system\n\n$content<end_of_turn>\n<start_of_turn>model\n"
             }
         }
+    }
+
+    /**
+     * УЛЬТРА-ПРОСТОЙ промпт для локальных офлайн-моделей.
+     *
+     * Маленькие квантизованные модели (0.5B-1.5B) не справляются с длинными
+     * инструкциями, RAG-контекстом, заголовками и правилами — начинают
+     * галлюцинировать, выдавать BPE-мусор или отвечать не по теме.
+     *
+     * Этот метод строит МИНИМАЛЬНЫЙ промпт:
+     *   system: короткая роль + контакты дилера (если есть)
+     *   user: только вопрос клиента + техника (если выбрана)
+     * Без RAG, без истории, без заголовков.
+     */
+    fun buildLocalChatPrompt(
+        userMessage: String,
+        selectedModel: BrpModel?,
+        customSystemPrompt: String = ""
+    ): String {
+        val contacts = if (customSystemPrompt.isNotBlank()) "\n$customSystemPrompt" else ""
+        val vehicle = selectedModel?.let { "\nТехника: ${it.brand} ${it.modelName}." } ?: ""
+
+        val system = "$SYSTEM_PROMPT$contacts"
+        val content = "$vehicle\nВопрос: $userMessage"
+
+        return wrapWithStyle(system, content, PromptStyle.CHATML)
     }
 
     // ============================================================
