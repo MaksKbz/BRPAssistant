@@ -283,9 +283,8 @@ class LlmInferenceEngine @Inject constructor(
         // Одинокие теги (незакрытые)
         result = result.replace(Regex("</?think>", RegexOption.IGNORE_CASE), "")
 
-        // 2. Удаляем BPE byte-level токены — это Unicode символы которые
-        // появляются при некорректной детокенизации (Ġ = space, âĤĪ = спецсимвол)
-        result = result.replace(Regex("[\\u0120\\u0100\\u0101]") { "" }) // Ġ, Ā, ā
+        // 2. Удаляем BPE byte-level токены
+        result = result.replace(Regex("[\\u0120\\u0100\\u0101]"), "") // Ġ, Ā, ā
         // Удаляем sequences типа âĤ, âĤĪ, ĠâĤł (BPE артефакты)
         result = result.replace(Regex("â[\\u0124-\\u013F]+"), "")
         result = result.replace(Regex("Ġ[â\\u0124-\\u013F]+"), "")
