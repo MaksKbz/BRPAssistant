@@ -17,7 +17,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Нужен token с правами push, чтобы коммит версии прошёл на main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 17
@@ -35,19 +34,16 @@ jobs:
           gradle-version: '8.13'
 
       # ── Авто-бамп патч-версии ────────────────────────────────────────────
-      # Читает versionName и versionCode из build.gradle.kts,
-      # поднимает патч-часть и versionCode на 1,
-      # записывает обратно и пушит коммит со скипом CI.
+      # Поднимает versionName (патч) и versionCode на 1,
+      # коммитит в main с [skip ci] — не запускает новую сборку.
       - name: Bump patch version
         id: bump
         run: |
           GRADLE=app/build.gradle.kts
 
-          # Читаем текущую версию
           OLD_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$GRADLE")
           OLD_CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$GRADLE")
 
-          # Разбиваем major.minor.patch
           IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_NAME"
           NEW_PATCH=$((PATCH + 1))
           NEW_NAME="${MAJOR}.${MINOR}.${NEW_PATCH}"
@@ -55,11 +51,9 @@ jobs:
 
           echo "🔼 Версия: $OLD_NAME → $NEW_NAME  |  versionCode: $OLD_CODE → $NEW_CODE"
 
-          # Седой заменяем в файле
           sed -i "s/versionName = \"${OLD_NAME}\"/versionName = \"${NEW_NAME}\"/" "$GRADLE"
           sed -i "s/versionCode = ${OLD_CODE}/versionCode = ${NEW_CODE}/" "$GRADLE"
 
-          # Пушим коммит обратно в main
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$GRADLE"
@@ -75,7 +69,6 @@ jobs:
       - name: List APK outputs
         run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'
 
-      # STABLE SIGNING
       - name: Decode release keystore
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > release.p12
@@ -107,12 +100,15 @@ jobs:
           mv app-release-signed.apk \
             BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
 
-      # ── Публикация в GitHub Releases ───────────────────────────────────
+      # ── Публикация ──────────────────────────────────────────────────────
+      # Используем постоянный тег "latest" — в Releases всегда ровно
+      # один APK, актуальный. Имя файла меняется при каждом пуше.
+      # Старые сборки доступны через историю коммитов в main.
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.bump.outputs.new_version }}
-          name: "BRPAssistant v${{ steps.bump.outputs.new_version }}"
+          tag_name: latest
+          name: "BRPAssistant v${{ steps.bump.outputs.new_version }} — актуальная"
           body: |
             ## BRPAssistant v${{ steps.bump.outputs.new_version }}
 
@@ -133,13 +129,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload APK artifact (backup, 30 дней)
-        uses: actions/upload-artifact@v4
-        with:
-          name: BRPAssistant-v${{ steps.bump.outputs.new_version }}-release
-          path: BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
-          retention-days: 30
-
       - name: Upload ProGuard mapping
         uses: actions/upload-artifact@v4
         if: always()
@@ -151,12 +140,11 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "### ✅ Release APK v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **versionCode:** ${{ steps.bump.outputs.new_code }}" >> $GITHUB_STEP_SUMMARY
           APK="BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk"
           if [ -f "$APK" ]; then
             SIZE=$(ls -lh "$APK" | awk '{print $5}')
-            echo "- **APK size:** $SIZE" >> $GITHUB_STEP_SUMMARY
+            echo "- **Размер APK:** $SIZE" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "📦 Скачать: https://github.com/${{ github.repository }}/releases/latest" >> $GITHUB_STEP_SUMMARY
+          echo "📦 https://github.com/${{ github.repository }}/releases/latest" >> $GITHUB_STEP_SUMMARY
