@@ -26,7 +26,7 @@ class RelevanceScorer @Inject constructor() {
         val symptomLower = card.symptom.lowercase()
         if (symptomLower in q || q in symptomLower) score += 40f
 
-        // 2. Symptom keyword overlap
+        // 2. Symptom keyword overlap (стемминг)
         score += keywordOverlap(query, card.symptom) * 15f
 
         // 3. Causes keyword overlap
@@ -35,10 +35,27 @@ class RelevanceScorer @Inject constructor() {
         // 4. Full text keyword overlap
         score += keywordOverlap(query, card.fullText) * 5f
 
-        // 5. Node match
+        // 5. Node match — расширенный список BRP-узловых терминов
         val nodes = listOf(
-            "двигатель", "cvt", "ремен", "4wd", "привод", "охлажд",
-            "электр", "подвеск", "тормоз", "transmission", "ibr", "топлив"
+            // Двигатель / мотор
+            "двигатель", "мотор", "цилиндр", "поршень", "клапан", "газораспределение",
+            "зажигание", "свеча", "компрессия", "коленвал",
+            // Трансмиссия / CVT
+            "cvt", "ремень", "вариатор", "редуктор", "transmission",
+            "4wd", "привод", "муфта", "полуось",
+            // Охлаждение
+            "охлажд", "радиатор", "термостат", "антифриз",
+            // Электрика
+            "электр", "аккумулятор", "генератор", "проводка", "ecu", "efi",
+            // Подвеска / тормоз
+            "подвеска", "амортизатор", "тормоз", "колодка",
+            // Топливная
+            "топливо", "инжектор", "насос", "фильтр",
+            // BRP-специфично
+            "ibr", "dps", "abc", "linq", "rotax", "etec", "ace", "turbo",
+            // Английские алиасы
+            "engine", "belt", "brake", "suspension", "fuel", "cooling",
+            "steering", "electrical", "exhaust", "intake"
         )
         for (node in nodes) {
             if (q.contains(node) && card.node.lowercase().contains(node)) score += 20f
@@ -52,7 +69,16 @@ class RelevanceScorer @Inject constructor() {
             else       -> 0f
         }
 
-        // FIX 7: Model-family relevance boost / penalty
+        // 7. Бонус за совпадение кода ошибки (DTC: P0xxx, E0xxx, U0xxx и т.д.)
+        // При диагностике по коду ошибки это даёт точное сопоставление.
+        val errorCodeRegex = Regex("[pPeEuUcC][0-9]{4}")
+        val queryCode = errorCodeRegex.find(q.replace("\\s".toRegex(), ""))?.value?.lowercase()
+        if (queryCode != null) {
+            val cardText = (card.symptom + " " + card.causes + " " + card.fullText).lowercase()
+            if (cardText.contains(queryCode)) score += 50f  // точное совпадение кода
+        }
+
+        // FIX 8: Model-family relevance boost / penalty
         if (selectedModel != null) {
             val familyMatch = !card.modelFamily.isNullOrBlank() &&
                 card.modelFamily.equals(selectedModel.subcategory, ignoreCase = true)
@@ -61,13 +87,11 @@ class RelevanceScorer @Inject constructor() {
             val categoryMismatch = !card.equipmentType.equals(selectedModel.category, ignoreCase = true)
 
             when {
-                familyMatch       -> score += 25f  // exact model family match — boost
-                familyMismatch    -> score -= 30f  // wrong model family — heavy penalty
-                categoryMismatch  -> score -= 20f  // wrong vehicle category — penalty
+                familyMatch       -> score += 25f
+                familyMismatch    -> score -= 30f
+                categoryMismatch  -> score -= 20f
             }
 
-            // Extra penalty if compatibleModels explicitly lists other models
-            // but NOT the selected one
             if (!card.compatibleModels.isNullOrBlank() &&
                 !card.compatibleModels.contains(selectedModel.id, ignoreCase = true) &&
                 !card.compatibleModels.contains(selectedModel.subcategory ?: "", ignoreCase = true)
@@ -92,7 +116,8 @@ class RelevanceScorer @Inject constructor() {
         val cats = listOf(
             "хранение", "защита", "комфорт", "свет", "аудио", "лебёд",
             "ветров", "бампер", "крыша", "двер", "storage", "protection",
-            "comfort", "light", "audio", "winch", "windshield", "bumper", "roof", "door"
+            "comfort", "light", "audio", "winch", "windshield", "bumper", "roof", "door",
+            "linq", "cargo", "rack", "mirror", "зеркало", "порог", "багажник"
         )
         for (cat in cats) {
             if (q.contains(cat) && (
@@ -106,6 +131,13 @@ class RelevanceScorer @Inject constructor() {
         return score
     }
 
+    /**
+     * Подсчитывает долю совпадающих ключевых слов между query и text.
+     *
+     * Применяет частичный стемминг для кириллицы: обрезает падежные окончания
+     * (ево, его, а, я, ю, ь, и, т, ь) до корня. Это позволяет сопоставлять
+     * "двигатель", "двигателя", "двигателем" — все к одному корню.
+     */
     private fun keywordOverlap(query: String, text: String): Float {
         if (text.isBlank()) return 0f
         val stopWords = setOf(
@@ -117,13 +149,60 @@ class RelevanceScorer @Inject constructor() {
             "было", "быть", "нет", "да", "уже", "ещё", "тоже", "при", "после"
         )
         val queryWords = query.lowercase()
-            .replace(Regex("[^а-яёa-z0-9\\s]"), "")
+            .replace(Regex("[^\u0430-\u044f\u0451a-z0-9\\s]"), "")
             .split("\\s+".toRegex())
             .filter { it.length > 2 && it !in stopWords }
+            .map { stemCyrillic(it) }
             .toSet()
         if (queryWords.isEmpty()) return 0f
         val textLower = text.lowercase()
-        val matched = queryWords.count { textLower.contains(it) }
+        // Стеммируем слова в тексте и сопоставляем со стеммированными словами запроса
+        val textWords = textLower
+            .replace(Regex("[^\u0430-\u044f\u0451a-z0-9\\s]"), "")
+            .split("\\s+".toRegex())
+            .filter { it.length > 2 }
+            .map { stemCyrillic(it) }
+            .toSet()
+        val matched = queryWords.count { it in textWords }
         return matched.toFloat() / queryWords.size
+    }
+
+    /**
+     * Упрощённый стеммер для русских слов: обрезает типичные падежные окончания.
+     * Не является полным морфологическим анализатором, но значительно улучшает
+     * сопоставление форм: "двигателя" → "двигател", "тормозами" → "тормозам".
+     */
+    private fun stemCyrillic(word: String): String {
+        // Длинные окончания — в порядке убывания (от длинных к коротким)
+        val suffixes = listOf(
+            "евались", "овались",  // -евались
+            "ивается", "ывается",  // глагольные
+            "ивания", "ования",
+            "ами", "ями",         // творительный падеж
+            "ами", "еми",
+            "ах", "ях",           // предложный падеж
+            "ов", "ев",           // родительный падеж
+            "ам", "ям",           // дательный
+            "ого", "его",       // родительный прилагательное
+            "ие", "ые",           // именительный мн.ч
+            "ое", "ее",           // именительное ед.ч
+            "ий", "ый", "ой", "ей",  // прилагательные окончания
+            "ем", "им",           // дательный ед.ч
+            "ии", "ы",            // генитив ед.ч / именительный мн.ч
+            "у", "ю",             // винительный
+            "а", "я",             // именительный ж.р. / мн.ч ср.р.
+            "е",               // предложный
+            "и",               // родительный ж.р.
+            "ом", "ем",         // творительный
+            "ость", "ости"    // существительные на -ость
+        )
+        // Минимальная длина корня: 4 символа — не обрезаем слишком короткие слова
+        val minStemLength = 4
+        for (suffix in suffixes) {
+            if (word.endsWith(suffix) && word.length - suffix.length >= minStemLength) {
+                return word.dropLast(suffix.length)
+            }
+        }
+        return word
     }
 }
