@@ -278,27 +278,38 @@ class LlmInferenceEngine @Inject constructor(
     private fun cleanModelOutput(raw: String): String {
         var result = raw
 
-        // 1. Удаляем <think>...</think> блоки целиком
+        // 1. Удаляем <think>...</think> блоки целиком (DeepSeek R1 reasoning)
         result = result.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
-        // Одинокие теги (незакрытые)
         result = result.replace(Regex("</?think>", RegexOption.IGNORE_CASE), "")
 
-        // 2. Удаляем BPE byte-level токены
-        result = result.replace(Regex("[\\u0120\\u0100\\u0101]"), "") // Ġ, Ā, ā
-        // Удаляем sequences типа âĤ, âĤĪ, ĠâĤł (BPE артефакты)
-        result = result.replace(Regex("â[\\u0124-\\u013F]+"), "")
-        result = result.replace(Regex("Ġ[â\\u0124-\\u013F]+"), "")
+        // 2. Агрессивно удаляем ВСЕ BPE byte-level артефакты.
+        // Это Unicode символы из Latin Extended которые появляются при
+        // некорректной детокенизации квантизованных моделей.
+        // Удаляем диапазоны: Ā-ą (U+0100-0105), Ġ-ģ (U+0120-0123),
+        // â + любые расширенные символы после него
+        result = result.replace(Regex("[\\u0100-\\u017F]{1,}"), "")
+        // Отдельные проблемные sequences
+        result = result.replace("Ġâļł", "")
+        result = result.replace("ĠâļĽ", "")
+        result = result.replace("âĤ", "")
+        result = result.replace("Ġ", " ")
 
-        // 3. Удаляем спецсимволы CHATML которые модель может выдать
-        result = result.replace("<|im_start|>", "")
-            .replace("<|im_end|>", "")
-            .replace("<|end|>", "")
-            .replace("<|assistant|>", "")
-            .replace("<|system|>", "")
-            .replace("<|user|>", "")
+        // 3. Удаляем CHATML/шаблонные теги которые модель может выдать
+        val tagsToRemove = listOf(
+            "<|im_start|>", "<|im_end|>", "<|end|>", "<|assistant|>",
+            "<|system|>", "<|user|>", "<start_of_turn>", "<end_of_turn>",
+            "<|begin_of_text|>", "<|eot_id|>"
+        )
+        tagsToRemove.forEach { result = result.replace(it, "") }
 
-        // 4. Схлопываем множественные пробелы и пустые строки
-        result = result.replace(Regex(" {3,}"), "  ")
+        // 4. Если после очистки остались только спецсимволы/мусор — возвращаем заглушку
+        val meaningful = result.filter { it.isLetterOrDigit() || it.isWhitespace() }
+        if (meaningful.isBlank() || meaningful.length < 5) {
+            return "Не удалось сгенерировать ответ. Попробуйте переформулировать вопрос."
+        }
+
+        // 5. Схлопываем множественные пробелы и пустые строки
+        result = result.replace(Regex(" {3,}"), " ")
         result = result.replace(Regex("\n{3,}"), "\n\n")
 
         return result.trim()

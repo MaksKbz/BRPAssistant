@@ -363,6 +363,16 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun refreshOfflineModels() {
+        val items = com.brp.assistant.data.llm.PublicOfflineModelCatalog.models.map { model ->
+            OfflineModelUiItem(
+                model = model,
+                isDownloaded = llmEngine.isModelDownloaded(model)
+            )
+        }
+        _state.update { s -> s.copy(allOfflineModels = items) }
+    }
+
     private fun activateFromChat(model: com.brp.assistant.data.llm.OfflineModelInfo) {
         viewModelScope.launch {
             _state.update { it.copy(error = "⏳ Активирую ${model.title}...") }
@@ -398,6 +408,8 @@ class ChatViewModel @Inject constructor(
                             _state.update {
                                 it.copy(chatDownloadModelId = null, chatDownloadProgress = 0f)
                             }
+                            // Обновляем список моделей с актуальным статусом загрузки
+                            refreshOfflineModels()
                             // Сразу активируем после скачивания
                             activateFromChat(model)
                         }
