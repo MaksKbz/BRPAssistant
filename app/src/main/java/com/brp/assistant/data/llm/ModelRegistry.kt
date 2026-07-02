@@ -256,6 +256,10 @@ object PublicOfflineModelCatalog {
      *              при активных фоновых приложениях.
      *    3+ ГБ → Qwen3 0.6B  (LiteRT-LM, новое поколение, лёгкий)
      *    <3 ГБ → SmolLM2 135M (работает везде)
+     *
+     * FIX: исправлен id smollm2_135m_task → smollm2_135m_litertlm.
+     * Ранее ветка else ссылалась на несуществующий id "smollm2_135m_task",
+     * что приводило к NoSuchElementException на устройствах с <3 ГБ RAM.
      */
     fun recommendedForRam(totalRamGb: Int): OfflineModelInfo = when {
         totalRamGb >= 12 -> models.first { it.id == "qwen3_4b_litertlm" }
@@ -263,6 +267,6 @@ object PublicOfflineModelCatalog {
         totalRamGb >= 6  -> models.first { it.id == "qwen2_5_3b_task" }
         totalRamGb >= 5  -> models.first { it.id == "qwen3_1_7b_litertlm" }
         totalRamGb >= 3  -> models.first { it.id == "qwen3_0_6b_litertlm" }
-        else             -> models.first { it.id == "smollm2_135m_task" }
+        else             -> models.first { it.id == "smollm2_135m_litertlm" }
     }
 }

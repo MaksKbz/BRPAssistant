@@ -27,18 +27,24 @@ class UnifiedRetriever @Inject constructor(
     private val scorer: RelevanceScorer
 ) {
 
+    /**
+     * FIX: topK повышен до 7 (было 5) — даёт больше кандидатов для скоринга,
+     * что особенно важно при малой базе знаний или одном бренде.
+     * Порог снижен до 2f (было 3f): уменьшает пропуск неочевидных, но релевантных
+     * карточек при неполных запросах (1-2 ключевых слова).
+     */
     suspend fun retrieve(
         query: String,
         mode: RetrievalMode,
         selectedModelId: String? = null,
-        topK: Int = 5
+        topK: Int = 7
     ): RetrievalResult {
 
         val keywords = extractKeywords(query)
 
         val selectedModel: BrpModel? = selectedModelId?.let { modelDao.getById(it) }
 
-        // ── Knowledge cards ──────────────────────────────────────────────────────
+        // ── Knowledge cards ────────────────────────────────────────────────────────────────────
         val cards = when (mode) {
             RetrievalMode.DIAGNOSIS, RetrievalMode.BOTH -> {
 
@@ -52,15 +58,9 @@ class UnifiedRetriever @Inject constructor(
                  *
                  * SQLite FTS4 с токенайзером unicode61 плохо обрабатывает
                  * кириллицу на Android — запрос с русскими словами нередко
-                 * возвращает пустой список даже при наличии совпадений.
-                 *
-                 * Решение: если FTS вернул пустой список, делаем LIKE-поиск
-                 * через getByBrandAndCategory или getByModelFamily (они уже
-                 * существуют в KnowledgeDao) и фильтруем по symptom/fullText.
-                 * LIKE работает с кириллицей корректно.
+                 * возвращает пустой список. LIKE-поиск работает корректно.
                  */
                 val ftsResults = if (ftsRaw.isEmpty() && keywords.isNotBlank() && selectedModel != null) {
-                    // Фоллбек: берём все карточки по модели и фильтруем вручную
                     val byFamily = knowledgeDao.getByModelFamily(
                         brand = selectedModel.brand,
                         modelFamily = selectedModel.subcategory
@@ -102,13 +102,13 @@ class UnifiedRetriever @Inject constructor(
                 filtered
                     .map { ScoredCard(it, scorer.scoreKnowledgeCard(query, it, selectedModel)) }
                     .sortedByDescending { it.score }
-                    .filter { it.score > 3f }
+                    .filter { it.score > 2f }   // FIX: снижен порог 3f → 2f
                     .take(topK)
             }
             RetrievalMode.ACCESSORY -> emptyList()
         }
 
-        // ── Accessories ──────────────────────────────────────────────────────────
+        // ── Accessories ────────────────────────────────────────────────────────────────────
         val accessories = when (mode) {
             RetrievalMode.ACCESSORY, RetrievalMode.BOTH -> {
                 val byModel = selectedModelId?.let { accessoryDao.getForModel(it) } ?: emptyList()
@@ -157,17 +157,73 @@ class UnifiedRetriever @Inject constructor(
         return platformOk || modelIdOk || brandOk
     }
 
+    /**
+     * Извлекает ключевые слова для FTS-запроса.
+     *
+     * Улучшения по сравнению с предыдущей версией:
+     *  1. Частичный стемминг кириллицы — "двигателя" → "двигател" —
+     *     помогает FTS найти карточки с "двигатель" и "двигателем".
+     *  2. Биграммы — добавляют в FTS-запрос сочетания соседних слов,
+     *     чтобы найти фразеологические совпадения вроде "двигатель греет".
+     *  3. Извлекаются коды ошибок (P0xxx/E0xxx) и акронимы BRP без фильтрации.
+     */
     private fun extractKeywords(query: String): String {
         val stopWords = setOf(
             "не", "как", "что", "почему", "делать", "где", "когда", "какой",
             "подскажи", "посоветуй", "хочу", "подобрать", "выбрать", "купить",
             "рекомендуй", "нужно", "может", "какая", "какие", "бы"
         )
-        return query.lowercase()
-            .replace(Regex("[^а-яёa-z0-9\\s]"), "")
-            .split("\\s+".toRegex())
-            // FIX: порог > 1 вместо > 2, чтобы BRP/ECU/RPM/CAN не отсеивались
+
+        val cleaned = query.lowercase()
+            .replace(Regex("[^\u0430-\u044f\u0451a-z0-9\\s]"), " ")
+
+        val words = cleaned.split("\\s+".toRegex())
             .filter { it.length > 1 && it !in stopWords }
-            .joinToString(" OR ")
+
+        // Коды ошибок и акронимы BRP включаем без изменений
+        val errorCodes = Regex("[pPeEuUcC][0-9]{4}").findAll(query)
+            .map { it.value.lowercase() }.toList()
+        val brpAcronyms = Regex("\\b(ibr|dps|cvt|ecu|efi|abc|4wd|linq|rotax|etec|ace)\\b")
+            .findAll(query.lowercase()).map { it.value }.toList()
+
+        // Стеммируем обычные слова для поиска форм ("\u0434вигателя" → "двигател")
+        val stemmedWords = words.map { stemForFts(it) }.distinct()
+
+        // Биграммы: сочетания соседних значимых слов (без стоп-слов)
+        val significantWords = words.filter { it.length > 3 && it !in stopWords }
+        val bigrams = significantWords.zipWithNext()
+            .map { (a, b) -> "\"${stemForFts(a)} ${stemForFts(b)}\"" }
+            .take(3)  // не больше 3 биграмм — FTS-запрос не разрастёт
+
+        val allTerms = (stemmedWords + errorCodes + brpAcronyms + bigrams).distinct()
+        return allTerms.joinToString(" OR ")
+    }
+
+    /**
+     * Обрезает падежные окончания для более точного FTS-поиска.
+     * Аналогично stemCyrillic() в RelevanceScorer, но облегчённый вариант
+     * для FTS (больше суффиксов, меньше преобразований).
+     */
+    private fun stemForFts(word: String): String {
+        val suffixes = listOf(
+            "евались", "овались", "иваются", "ываются",
+            "ающего", "ющего", "ающей", "ющей",
+            "ования", "ивания",
+            "ами", "ями", "ах", "ях",
+            "ов", "ев", "ам", "ям",
+            "ого", "его", "ие", "ые",
+            "ий", "ый", "ой", "ей",
+            "ость", "ости",
+            "ем", "им", "ии", "ы",
+            "ю", "я", "е", "и",
+            "а", "ом"
+        )
+        val minLength = 4
+        for (suffix in suffixes) {
+            if (word.endsWith(suffix) && word.length - suffix.length >= minLength) {
+                return word.dropLast(suffix.length)
+            }
+        }
+        return word
     }
 }
