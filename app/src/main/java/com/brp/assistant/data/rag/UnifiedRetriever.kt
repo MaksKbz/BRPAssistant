@@ -109,26 +109,31 @@ class UnifiedRetriever @Inject constructor(
         }
 
         // ── Accessories ────────────────────────────────────────────────────────────────────
-        val accessories = when (mode) {
-            RetrievalMode.ACCESSORY, RetrievalMode.BOTH -> {
-                val byModel = selectedModelId?.let { accessoryDao.getForModel(it) } ?: emptyList()
-                val byQuery = if (keywords.isNotBlank()) accessoryDao.search(keywords, topK * 2) else emptyList()
-                val byPlatform = selectedModel?.platform?.let { plat ->
-                    accessoryDao.getByPlatform(plat)
-                } ?: emptyList()
+        val accessories = run {
+            val searchWords = extractAccessorySearchWords(query)
+            val allAcc = accessoryDao.getAll()
+            val byWords = if (searchWords.isNotEmpty()) {
+                allAcc.filter { acc ->
+                    val text = "${acc.name} ${acc.description} ${acc.sku} ${acc.tags}".lowercase()
+                    searchWords.any { word -> text.contains(word.lowercase()) }
+                }
+            } else emptyList()
 
-                (byModel + byQuery + byPlatform)
-                    .distinctBy { it.id }
-                    .filter { acc ->
-                        if (selectedModel != null) isAccessoryCompatible(acc, selectedModel)
-                        else true
-                    }
-                    .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
-                    .sortedByDescending { it.score }
-                    .filter { it.score > 5f }
-                    .take(topK)
-            }
-            RetrievalMode.DIAGNOSIS -> emptyList()
+            val byModel = selectedModelId?.let { accessoryDao.getForModel(it) } ?: emptyList()
+            val byPlatform = selectedModel?.platform?.let { plat ->
+                accessoryDao.getByPlatform(plat)
+            } ?: emptyList()
+
+            (byWords + byModel + byPlatform)
+                .distinctBy { it.id }
+                .filter { acc ->
+                    if (selectedModel != null) isAccessoryCompatible(acc, selectedModel)
+                    else true
+                }
+                .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
+                .sortedByDescending { it.score }
+                .filter { it.score >= 0f }
+                .take(topK)
         }
 
         val modelResults = modelDao.search(
@@ -166,6 +171,37 @@ class UnifiedRetriever @Inject constructor(
         val brandOk = acc.brand.contains(model.brand, ignoreCase = true)
         val modelIdOk = acc.compatibleModels?.contains(model.id, ignoreCase = true) == true
         return platformOk || modelIdOk || brandOk
+    }
+
+    private fun extractAccessorySearchWords(query: String): List<String> {
+        val q = query.lowercase()
+        val words = mutableListOf<String>()
+        if (listOf("руж", "оружи", "винтовк", "карабин", "охот", "gun", "стрел").any { q.contains(it) }) {
+            words.addAll(listOf("gun", "case", "boot", "holder", "руж"))
+        }
+        if (listOf("ед", "еда", "продукт", "холод", "напитк", "термос", "пищ", "куша", "пить", "вода").any { q.contains(it) }) {
+            words.addAll(listOf("cooler", "холодильник", "bag", "сумка", "box", "кофр"))
+        }
+        if (listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк").any { q.contains(it) }) {
+            words.addAll(listOf("box", "trunk", "bag", "cargo", "linq", "кофр", "ящик", "сумка"))
+        }
+        if (listOf("стекл", "ветр", "дефлект").any { q.contains(it) }) {
+            words.addAll(listOf("windshield", "стекло", "deflector"))
+        }
+        if (listOf("защит", "днищ", "бампер", "грязь").any { q.contains(it) }) {
+            words.addAll(listOf("skid", "plate", "bumper", "защита", "бампер"))
+        }
+        if (listOf("лебедк", "winch", "трос").any { q.contains(it) }) {
+            words.addAll(listOf("winch", "лебедка"))
+        }
+        if (listOf("свет", "фар", "led", "люстр").any { q.contains(it) }) {
+            words.addAll(listOf("light", "led", "свет", "фара"))
+        }
+        if (words.isEmpty()) {
+            val stopWords = setOf("мне", "надо", "как", "могу", "что", "где", "когда", "какой", "для", "моей", "технике", "помоги")
+            words.addAll(q.split("\\s+".toRegex()).filter { it.length > 3 && it !in stopWords })
+        }
+        return words.distinct()
     }
 
     /**
