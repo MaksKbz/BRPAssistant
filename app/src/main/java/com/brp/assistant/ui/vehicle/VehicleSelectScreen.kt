@@ -44,6 +44,35 @@ fun VehicleSelectScreen(
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
                 }
             )
+        },
+        bottomBar = {
+            // Кнопка "Подтвердить" внизу экрана — всегда видна, не нужно скроллить
+            AnimatedVisibility(
+                visible = selectedModel != null,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()
+            ) {
+                Surface(
+                    tonalElevation = 3.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Подтвердить: ${selectedModel?.modelName ?: ""}", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
         }
     ) { padding ->
         LazyColumn(
@@ -116,22 +145,6 @@ fun VehicleSelectScreen(
                         isSelected = selectedModel?.id == model.id,
                         onSelect = { onModelSelect(model) }
                     )
-                }
-
-                item {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = onConfirm,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        enabled = selectedModel != null,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Text("Подтвердить выбор", style = MaterialTheme.typography.titleMedium)
-                    }
                 }
             }
         }
