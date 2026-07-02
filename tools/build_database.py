@@ -312,7 +312,62 @@ def build_database():
             c.execute("INSERT OR REPLACE INTO knowledge_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", card)
             card_count += 1
     print(f"  ✅ {card_count} карточек знаний")
-    
+
+    # Process uploaded catalogs from UPLOADS_DIR
+    uploads_dir = (root / UPLOADS_DIR).resolve()
+    if uploads_dir.exists():
+        print(f"📁 Обработка каталогов из {uploads_dir}...")
+        acc_items = []
+        chunk_idx = 0
+        seen_skus = set()
+        sku_pattern = re.compile(r'^(.*?)(\b(?:7150|8602|2951|7790|2194|520|440)\d{5}\b)(.*)$')
+
+        for f in sorted(uploads_dir.glob("*.md")):
+            fname = f.name
+            brand = "can-am"
+            if "Lynx" in fname: brand = "lynx"
+            elif "Sea-Doo" in fname: brand = "sea-doo"
+            elif "Ski-Doo" in fname: brand = "ski-doo"
+
+            eq_type = "atv"
+            if "SSV" in fname or "Maverick" in fname or "Traxter" in fname or "Commander" in fname: eq_type = "ssv"
+            elif "OnRoad" in fname: eq_type = "3-wheel"
+            elif "Sea-Doo" in fname: eq_type = "pwc"
+            elif "Lynx" in fname or "Ski-Doo" in fname: eq_type = "snowmobile"
+            elif "Apparel" in fname: eq_type = "all"
+
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            text = re.sub(r'URL Source:.*\n', '', text)
+            text = re.sub(r'Published Time:.*\n', '', text)
+            text = re.sub(r'Markdown Content:\s*', '', text)
+
+            for line in text.split('\n'):
+                m = sku_pattern.search(line.strip())
+                if m:
+                    left, sku, right = m.groups()
+                    name = (left.strip().lstrip('-*•· ') or right.strip().lstrip('-*•· ')).split('.')[0]
+                    if len(name) > 3 and not name.isdigit() and sku not in seen_skus:
+                        seen_skus.add(sku)
+                        if len(name) > 80: name = name[:80]
+                        desc = f"{name} (SKU: {sku}). Каталог: {fname}"
+                        acc_items.append((f"cat_acc_{sku}", sku, brand, eq_type, "catalog", name, desc, "[]", "[]", None, 0, 0, "[]", json.dumps([sku, brand, eq_type], ensure_ascii=False)))
+
+            sections = re.split(r'\n(?=#+ )', text)
+            for sec in sections:
+                sec_clean = sec.strip()
+                if len(sec_clean) > 80 and not sec_clean.startswith('# TABLE OF CONTENTS') and not sec_clean.startswith('# UNITS COMPARATIVE'):
+                    lines = [l.strip() for l in sec_clean.split('\n') if l.strip()]
+                    header = lines[0].lstrip('# ') if lines else 'Каталог'
+                    if len(header) > 100: header = header[:100]
+                    card_id = f"cat_{fname[:12]}_{chunk_idx}"
+                    chunk_idx += 1
+                    c.execute("INSERT OR REPLACE INTO knowledge_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (card_id, eq_type, brand, "catalog", "Каталог BRP", header, "low", 0, "[]", "[]", "[]", "[]", "[]", "[]", sec_clean[:1800]))
+
+        c.executemany("INSERT OR REPLACE INTO brp_accessories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", acc_items)
+        print(f"  ✅ {len(acc_items)} аксессуаров по артикулам и {chunk_idx} секций каталогов")
+
+    c.execute("INSERT INTO knowledge_cards_fts(knowledge_cards_fts) VALUES('rebuild')")
     conn.commit()
     
     # Stats
