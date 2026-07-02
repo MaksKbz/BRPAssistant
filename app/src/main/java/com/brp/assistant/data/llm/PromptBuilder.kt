@@ -311,13 +311,23 @@ ${histBlock(history)}
     fun buildLocalChatPrompt(
         userMessage: String,
         selectedModel: BrpModel?,
-        customSystemPrompt: String = ""
+        customSystemPrompt: String = "",
+        accessories: List<Accessory> = emptyList(),
+        cards: List<KnowledgeCard> = emptyList()
     ): String {
         val contacts = if (customSystemPrompt.isNotBlank()) "\n$customSystemPrompt" else ""
         val vehicle = selectedModel?.let { "\nТехника: ${it.brand} ${it.modelName}." } ?: ""
+        
+        val accSection = if (accessories.isNotEmpty()) {
+            "\nДоступные аксессуары BRP:\n" + accessories.take(4).joinToString("\n") { "- ${it.name} (арт. ${it.sku})" }
+        } else ""
+        
+        val cardsSection = if (cards.isNotEmpty()) {
+            "\nСправка из базы BRP:\n" + cards.take(2).joinToString("\n") { "- ${it.symptom}: ${it.fullText.take(250)}" }
+        } else ""
 
-        val system = "$SYSTEM_PROMPT$contacts"
-        val content = "$vehicle\nВопрос: $userMessage"
+        val system = "Ты BRP-ассистент. Отвечай кратко, чётко и строго по сути вопроса на русском языке. Если спрашивают про подбор аксессуаров — предлагай исключительно аксессуары из списка ниже с их артикулами. Не перечисляй характеристики техники, если об этом явно не просили.$contacts"
+        val content = "$vehicle$accSection$cardsSection\nВопрос: $userMessage"
 
         return wrapWithStyle(system, content, PromptStyle.CHATML)
     }

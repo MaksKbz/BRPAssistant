@@ -94,12 +94,13 @@ class DiagnoseUseCase @Inject constructor(
                 return@flow
             }
 
-            // ЛОКАЛЬНАЯ: ультра-простой промпт (как в ChatUseCase)
+            // ЛОКАЛЬНАЯ: компактный промпт с топ-2 картами (без перегрузки)
             if (!useRemote) {
                 val localPrompt = promptBuilder.buildLocalChatPrompt(
                     userMessage = message,
                     selectedModel = brpModel,
-                    customSystemPrompt = systemPrompt
+                    customSystemPrompt = systemPrompt,
+                    cards = cards.take(2)
                 )
                 val localResult = llm.generateResponse(localPrompt, onPartial)
                 localResult.onSuccess { text ->
@@ -189,23 +190,22 @@ class ChatUseCase @Inject constructor(
         }
 
         val brpModel = vehicleId?.let { modelRepository.getById(it) }
+        val retrieval = retriever.retrieve(message, mode, vehicleId)
+        val cards = retrieval.cards.map { it.card }
+        val accessories = retrieval.accessories.map { it.accessory }
 
-        // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: ультра-простой промпт без RAG/заголовков.
-        // Маленькие модели не справляются со сложным промптом → галлюцинации.
-        // RAG-контекст и сложная разметка — только для онлайн.
+        // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: компактный сфокусированный промпт.
+        // Передаём только топ-4 аксессуара или топ-2 справки без лишних заголовков.
         if (!useRemote) {
             val localPrompt = promptBuilder.buildLocalChatPrompt(
                 userMessage = message,
                 selectedModel = brpModel,
-                customSystemPrompt = systemPrompt
+                customSystemPrompt = systemPrompt,
+                accessories = accessories,
+                cards = cards
             )
             return llm.generateResponse(localPrompt, onPartial)
         }
-
-        // ОНЛАЙН: полный промпт с RAG
-        val retrieval = retriever.retrieve(message, mode, vehicleId)
-        val cards = retrieval.cards.map { it.card }
-        val accessories = retrieval.accessories.map { it.accessory }
 
         val prompt = promptBuilder.buildFreeChatPrompt(
             userMessage = message,
