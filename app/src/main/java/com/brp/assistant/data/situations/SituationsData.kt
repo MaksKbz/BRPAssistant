@@ -67,6 +67,28 @@ object SituationsData {
             fullText = "Режим полного газа при запуске отключает форсунки на моторах E-TEC."
         ),
 
+        // === LYNX ===
+        KnowledgeCard(
+            id = "lx_cool", equipmentType = "Lynx", brand = "Lynx", node = "Платформа",
+            symptom = "Перегрев на укатанной трассе Radien2", riskLevel = "high", requiresEvacuation = 0,
+            modelFamily = "FUEL",
+            causes = "[\"Жесткий наст без снежной пыли\", \"Не опущены скребки Ice Scratchers\"]",
+            steps = "[\"1. Немедленно опустить скребки\", \"2. Свернуть в пухляк на 2-3 минуты\", \"3. Проверить налипание льда\"]",
+            canDo = "[\"Очистка тоннеля киянкой\"]", mustNotDo = "[\"Глушить мотор сразу при перегреве\"]", stopConditions = "[\"Утечка антифриза\"]",
+            fullText = "Платформа Lynx Radien2 требует обязательного использования скребков на жестком снегу."
+        ),
+
+        // === CAN-AM 3-WHEEL ===
+        KnowledgeCard(
+            id = "3w_vss", equipmentType = "Can-Am 3-Wheel", brand = "Can-Am 3-Wheel", node = "Тормоза / VSS",
+            symptom = "Ошибка VSS Fault / Limp Mode", riskLevel = "high", requiresEvacuation = 0,
+            modelFamily = "FUEL",
+            causes = "[\"Низкий уровень тормозной жидкости\", \"Грязь на датчике ABS\", \"Езда с ногой на тормозе\"]",
+            steps = "[\"1. Выключить зажигание и вынуть ключ на 3-5 мин\", \"2. Проверить уровень DOT 4\", \"3. Очистить гребенки ABS\"]",
+            canDo = "[\"Перезапуск блоков\"]", mustNotDo = "[\"Доливать DOT 5\"]", stopConditions = "[\"Постоянная ошибка гидроблока\"]",
+            fullText = "Система курсовой устойчивости VSS на Spyder/Ryker отключает тягу при сбоях датчиков колес."
+        ),
+
         // === UNIVERSAL ===
         KnowledgeCard(
             id = "uni_batt", equipmentType = "Universal", brand = "BRP", node = "Электрика",

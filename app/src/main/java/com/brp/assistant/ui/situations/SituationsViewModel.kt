@@ -70,7 +70,7 @@ class SituationsViewModel @Inject constructor(
                 }
                 
                 val hardcodedNodes = SituationsData.predefinedCards
-                    .filter { it.equipmentType == category }
+                    .filter { it.equipmentType.equals(category, ignoreCase = true) || category.contains(it.equipmentType, ignoreCase = true) || it.equipmentType.contains(category, ignoreCase = true) }
                     .map { it.node }
                     .distinct()
                 
@@ -94,7 +94,7 @@ class SituationsViewModel @Inject constructor(
                 val filterTag = if (isElectric) "ELECTRIC" else "FUEL"
                 
                 val hardcodedCards = SituationsData.predefinedCards.filter { 
-                    it.equipmentType == category && 
+                    (it.equipmentType.equals(category, ignoreCase = true) || category.contains(it.equipmentType, ignoreCase = true) || it.equipmentType.contains(category, ignoreCase = true)) && 
                     it.node == node &&
                     (it.modelFamily == null || it.modelFamily == filterTag)
                 }

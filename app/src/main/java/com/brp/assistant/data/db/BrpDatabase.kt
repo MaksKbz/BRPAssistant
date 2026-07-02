@@ -237,23 +237,33 @@ interface KnowledgeDao {
 
     @Query("""
         SELECT * FROM knowledge_cards
-        WHERE brand = :brand AND equipmentType = :category
+        WHERE (brand = :brand OR :brand LIKE '%' || brand || '%' OR brand = 'brp')
+        AND (equipmentType = :category OR equipmentType = 'all' OR equipmentType LIKE '%' || :category || '%'
+             OR (:category = 'ssv' AND equipmentType IN ('sxs', 'utv', 'atv_utv'))
+             OR (:category = 'atv' AND equipmentType = 'atv_utv'))
         ORDER BY riskLevel DESC
     """)
     suspend fun getByBrandAndCategory(brand: String, category: String): List<KnowledgeCard>
 
     @Query("""
         SELECT * FROM knowledge_cards
-        WHERE brand = :brand
-        AND (modelFamily = :modelFamily OR modelFamily IS NULL)
+        WHERE (brand = :brand OR :brand LIKE '%' || brand || '%' OR brand = 'brp')
+        AND (modelFamily = :modelFamily OR modelFamily IS NULL OR modelFamily = 'all' OR :modelFamily LIKE '%' || modelFamily || '%')
         ORDER BY riskLevel DESC
     """)
     suspend fun getByModelFamily(brand: String, modelFamily: String): List<KnowledgeCard>
 
-    @Query("SELECT * FROM knowledge_cards WHERE equipmentType = :type AND node = :node")
+    @Query("""
+        SELECT * FROM knowledge_cards
+        WHERE (equipmentType = :type OR brand = :type OR :type LIKE '%' || brand || '%' OR brand LIKE '%' || :type || '%')
+        AND node = :node
+    """)
     suspend fun getByFilter(type: String, node: String): List<KnowledgeCard>
 
-    @Query("SELECT DISTINCT node FROM knowledge_cards WHERE equipmentType = :type")
+    @Query("""
+        SELECT DISTINCT node FROM knowledge_cards
+        WHERE equipmentType = :type OR brand = :type OR :type LIKE '%' || brand || '%' OR brand LIKE '%' || :type || '%'
+    """)
     suspend fun getNodesForType(type: String): List<String>
 
     @Query("SELECT DISTINCT equipmentType FROM knowledge_cards")

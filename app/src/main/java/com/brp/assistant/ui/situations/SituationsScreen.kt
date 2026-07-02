@@ -40,12 +40,22 @@ fun SituationsScreen(
     
     val isElectric = selectedVehicle?.isElectric == 1 || selectedVehicle?.modelName?.lowercase()?.contains("electric") == true
 
-    // Filter categories to only show selected vehicle's brand if selected
     val displayCategories = remember(categories, selectedVehicle) {
         if (selectedVehicle != null) {
-            // Special case for electric
+            val cleanBrand = if (selectedVehicle.brand.startsWith("can-am", ignoreCase = true)) "can-am" else selectedVehicle.brand
             if (isElectric) categories.filter { it.contains("Electric", ignoreCase = true) || it.contains("Universal", ignoreCase = true) }
-            else categories.filter { it.contains(selectedVehicle.brand, ignoreCase = true) && !it.contains("Electric", ignoreCase = true) }
+            else categories.filter { 
+                it.contains(cleanBrand, ignoreCase = true) || 
+                cleanBrand.contains(it, ignoreCase = true) || 
+                it.contains(selectedVehicle.brand, ignoreCase = true) ||
+                it.equals(selectedVehicle.category, ignoreCase = true) ||
+                (selectedVehicle.category == "ssv" && it in listOf("sxs", "utv", "atv_utv")) ||
+                (selectedVehicle.category == "atv" && it in listOf("atv", "atv_utv")) ||
+                (selectedVehicle.category == "3-wheel" && it.contains("3-wheel", ignoreCase = true)) ||
+                (selectedVehicle.brand.contains("ski-doo", ignoreCase = true) && (it.contains("Ski-Doo", ignoreCase = true) || it == "snowmobile")) ||
+                (selectedVehicle.brand.contains("lynx", ignoreCase = true) && (it.contains("Lynx", ignoreCase = true) || it == "snowmobile")) ||
+                (selectedVehicle.brand.contains("sea-doo", ignoreCase = true) && (it.contains("Sea-Doo", ignoreCase = true) || it == "pwc"))
+            }
         } else categories
     }
 

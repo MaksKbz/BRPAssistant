@@ -139,11 +139,22 @@ class UnifiedRetriever @Inject constructor(
     }
 
     private fun isCardRelevantToModel(card: KnowledgeCard, model: BrpModel): Boolean {
-        val brandMatch = card.brand.equals(model.brand, ignoreCase = true)
-        val categoryMatch = card.equipmentType.equals(model.category, ignoreCase = true)
+        val brandMatch = card.brand.equals(model.brand, ignoreCase = true) ||
+            model.brand.contains(card.brand, ignoreCase = true) ||
+            card.brand.contains(model.brand, ignoreCase = true) ||
+            card.brand.equals("brp", ignoreCase = true)
+        val categoryMatch = card.equipmentType.equals(model.category, ignoreCase = true) ||
+            card.equipmentType.equals("all", ignoreCase = true) ||
+            card.equipmentType.contains(model.category, ignoreCase = true) ||
+            model.category.contains(card.equipmentType, ignoreCase = true) ||
+            (model.category.equals("ssv", ignoreCase = true) && card.equipmentType in listOf("sxs", "utv", "atv_utv")) ||
+            (model.category.equals("atv", ignoreCase = true) && card.equipmentType == "atv_utv")
         val familyMatch = card.modelFamily.isNullOrBlank() ||
-            card.modelFamily.equals(model.subcategory, ignoreCase = true)
+            card.modelFamily.equals("all", ignoreCase = true) ||
+            card.modelFamily.equals(model.subcategory, ignoreCase = true) ||
+            model.subcategory.contains(card.modelFamily, ignoreCase = true)
         val compatibleModelsOk = card.compatibleModels.isNullOrBlank() ||
+            card.compatibleModels == "[]" ||
             card.compatibleModels.contains(model.id, ignoreCase = true) ||
             card.compatibleModels.contains(model.subcategory ?: "", ignoreCase = true)
         return brandMatch && categoryMatch && familyMatch && compatibleModelsOk

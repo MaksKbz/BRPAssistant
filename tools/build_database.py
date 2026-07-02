@@ -290,7 +290,15 @@ def build_database():
         ("P0122", "can-am", "TPS: короткое замыкание на массу", '["Повреждён TPS","влага в разъёме"]', "Проверьте разъём, замените TPS"),
         ("P0123", "can-am", "TPS: обрыв или КЗ на 12V", '["Повреждён TPS"]', "Замените TPS"),
         ("P0335", "can-am", "Неисправен датчик коленвала (CPS)", '["Повреждён датчик","проводка"]', "Замените CPS"),
+        ("P0562", "can-am", "Низкое напряжение бортовой сети (<11.5V)", '["Слаб АКБ","окисление контактов","регулятор напряжения"]', "Проверьте клеммы АКБ, заряд статора"),
+        ("P0500", "can-am", "Датчик скорости колеса (VSS Fault)", '["Грязь на гребенке ABS","обрыв датчика скорости"]', "Промойте гребенки датчиков колес, проверьте зазоры"),
+        ("P0700", "can-am", "Неисправность контроллера коробки (DCT/SE6)", '["Низкое давление масла коробки","перегрев сцепления"]', "Остановитесь, дайте остыть на холостых в N/P"),
         ("P0264", "ski-doo", "Неисправность жгута форсунок", '["Обрыв внутри изоляции (ЧАСТО!)"]', "Проверьте жгут в 2-3 дюймах от разъёма, прозвоните"),
+        ("P0141", "ski-doo", "Ошибка привода клапанов RAVE", '["Нагар на клапанах RAVE","заклинивание шторки"]', "Прочистите клапаны RAVE от нагара и масла"),
+        ("P1488", "ski-doo", "Перегрев выхлопа (EGT Sensor High)", '["Бедная смесь","подсос воздуха","плохой бензин"]', "Остановитесь, проверьте патрубки впуска на подсос"),
+        ("P0264", "lynx", "Неисправность форсунки E-TEC", '["Обрыв проводки форсунки в перегибе жгута"]', "Проверьте жгут форсунок под коробом впуска"),
+        ("P0141", "lynx", "Ошибка положения клапана RAVE", '["Налипание масляного шлака на клапаны RAVE"]', "Снимите крышку RAVE клапана, очистите шторку карбклинером"),
+        ("P1488", "lynx", "Превышение температуры выхлопных газов (EGT)", '["Недостаточное охлаждение в снегу","бедная смесь"]', "Выедьте в пухляк, опустите скребки Ice Scratchers"),
     ]
     c.executemany("INSERT OR REPLACE INTO fault_codes VALUES (?,?,?,?,?)", fault_codes)
     print(f"  ✅ {len(fault_codes)} кодов ошибок")
@@ -336,11 +344,31 @@ def parse_knowledge_card(filepath: Path) -> tuple:
     card_id = meta.get("id", filepath.stem)
     brand = meta.get("brand", "brp")
     
-    # Extract sections
-    causes = extract_json_list(body, "Вероятные причины")
-    can_do = extract_json_list(body, "Что МОЖНО")
-    must_not = extract_json_list(body, "Чего делать НЕЛЬЗЯ")
-    stop = extract_json_list(body, "Когда прекратить") or extract_json_list(body, "Когда к дилеру")
+    # Extract sections with synonyms for headings
+    causes = (extract_json_list(body, "Вероятные причины") or 
+              extract_json_list(body, "Причины") or 
+              extract_json_list(body, "Причины возникновения") or 
+              extract_json_list(body, "Симптомы и причины"))
+              
+    can_do = (extract_json_list(body, "Что МОЖНО") or 
+              extract_json_list(body, "Полевой ремонт") or 
+              extract_json_list(body, "Действия в полевых условиях") or 
+              extract_json_list(body, "Замена в полевых условиях") or 
+              extract_json_list(body, "Экстренные действия") or 
+              extract_json_list(body, "Что делать") or 
+              extract_json_list(body, "Решение в полевых условиях"))
+              
+    must_not = (extract_json_list(body, "Чего делать НЕЛЬЗЯ") or 
+                extract_json_list(body, "Чего делать нельзя") or 
+                extract_json_list(body, "НЕЛЬЗЯ") or 
+                extract_json_list(body, "Запрещено") or 
+                extract_json_list(body, "Опасности"))
+                
+    stop = (extract_json_list(body, "Когда прекратить") or 
+            extract_json_list(body, "Когда к дилеру") or 
+            extract_json_list(body, "Обращение к дилеру") or 
+            extract_json_list(body, "Когда обращаться в профессиональный сервис") or 
+            extract_json_list(body, "Профессиональный ремонт"))
     
     return (
         card_id,
@@ -364,14 +392,14 @@ def extract_json_list(text: str, heading: str) -> list:
     items = []
     in_section = False
     for line in text.split("\n"):
-        if heading in line:
+        if heading.lower() in line.lower():
             in_section = True
             continue
         if in_section:
-            if line.startswith("##") or (line.strip() and not line.strip().startswith(("-", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9."))):
+            if line.startswith("##") or (line.strip() and not line.strip().startswith(("-", "*", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9."))):
                 if items:
                     break
-            stripped = line.strip().lstrip("- 0123456789. ")
+            stripped = line.strip().lstrip("-* 0123456789. ")
             if stripped and not stripped.startswith("#"):
                 items.append(stripped)
     return items
