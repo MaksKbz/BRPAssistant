@@ -57,6 +57,24 @@ jobs:
           echo "Found APK: $APK_PATH"
           ls -lh "$APK_PATH"
 
+      - name: Decode stable keystore and sign APK
+        run: |
+          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > release.p12
+            APK="${{ steps.find_apk.outputs.APK_PATH }}"
+            BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+              --ks release.p12 \
+              --ks-type PKCS12 \
+              --ks-key-alias "${{ secrets.RELEASE_KEY_ALIAS }}" \
+              --ks-pass "pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }}" \
+              --key-pass "pass:${{ secrets.RELEASE_KEY_PASSWORD }}" \
+              "$APK"
+            echo "✅ APK успешно подписан стабильным релизным ключом"
+          else
+            echo "⚠️ Секрет RELEASE_KEYSTORE_BASE64 не найден, оставлена debug подпись"
+          fi
+
       - name: Get version name
         id: version
         run: |
