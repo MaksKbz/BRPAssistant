@@ -17,8 +17,8 @@ android {
         applicationId = "com.brp.assistant"
         minSdk = 30
         targetSdk = 35
-        versionCode = 40
-        versionName = "2.8.5"
+        versionCode = 41
+        versionName = "2.8.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
