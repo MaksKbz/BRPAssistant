@@ -140,18 +140,22 @@ object PublicOfflineModelCatalog {
             downloadUrl  = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
 
+        // Ministral-3B (замена DeepSeek R1)
+        // DeepSeek R1 был reasoning-моделью — отвечал на английском, галлюцинировал.
+        // Ministral-3B — качественная instruct-модель Mistral, хорошо отвечает на русском.
+        // Источник: https://huggingface.co/litert-community/Ministral-3-3B-Instruct-2512
         OfflineModelInfo(
-            id           = "deepseek_r1_1_5b_task",
-            title        = "DeepSeek-R1 1.5B • 1.8 ГБ",
-            repoId       = "litert-community/DeepSeek-R1-Distill-Qwen-1.5B",
-            filename     = "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task",
-            license      = "MIT",
+            id           = "ministral_3b_litertlm",
+            title        = "Ministral 3B • 1.8 ГБ ⭐",
+            repoId       = "litert-community/Ministral-3-3B-Instruct-2512",
+            filename     = "Ministral-3-3B-Instruct-2512_q4_block32_ekv4096.litertlm",
+            license      = "Mistral AI Non-Production License",
             approxSizeMb = 1831,
             minRamGb     = 4,
             promptStyle  = PromptStyle.CHATML,
-            format       = ModelFormat.TASK,
-            description  = "1.8 ГБ. DeepSeek R1 с цепочкой рассуждений. Думает пошагово перед ответом — лучший выбор для диагностики и анализа кодов ошибок BRP.",
-            downloadUrl  = "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
+            format       = ModelFormat.LITERTLM,
+            description  = "1.8 ГБ. Качественная модель Mistral 3B. Отвечает чётко и лаконично на русском, без цепочки рассуждений. Отличный выбор для консультаций.",
+            downloadUrl  = "https://huggingface.co/litert-community/Ministral-3-3B-Instruct-2512/resolve/main/Ministral-3-3B-Instruct-2512_q4_block32_ekv4096.litertlm"
         ),
 
         // Qwen3 1.7B — LiteRT-LM
