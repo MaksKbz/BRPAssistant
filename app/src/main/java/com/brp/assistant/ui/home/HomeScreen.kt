@@ -34,6 +34,7 @@ fun HomeScreen(
     onNavigateToSituations: () -> Unit,
     onNavigateToVehicle: () -> Unit,
     onNavigateToModel: () -> Unit,
+    onNavigateToUserDocs: () -> Unit = {},
     onNavigateToSettings: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -164,13 +165,25 @@ fun HomeScreen(
                 fontWeight = FontWeight.SemiBold
             )
 
-            HomeCard(
-                icon        = Icons.Default.Psychology,
-                title       = "Настройки ИИ",
-                description = "Модели, API-ключи, провайдеры",
-                onClick     = onNavigateToModel,
-                modifier    = Modifier.fillMaxWidth()
-            )
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                HomeCard(
+                    icon        = Icons.Default.Psychology,
+                    title       = "Настройки ИИ",
+                    description = "Модели, API-ключи",
+                    onClick     = onNavigateToModel,
+                    modifier    = Modifier.weight(1f)
+                )
+                HomeCard(
+                    icon        = Icons.Default.LibraryBooks,
+                    title       = "Моя база",
+                    description = "Загрузить документы",
+                    onClick     = onNavigateToUserDocs,
+                    modifier    = Modifier.weight(1f)
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
         }

@@ -18,6 +18,9 @@ import com.brp.assistant.domain.model.RetrievalMode
 import com.brp.assistant.domain.usecase.ChatUseCase
 import com.brp.assistant.domain.usecase.ConversationSummaryUseCase
 import com.brp.assistant.domain.usecase.DiagnoseUseCase
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -274,7 +277,8 @@ class ChatViewModel @Inject constructor(
                 ChatMessage(
                     id      = e.id,
                     content = e.content,
-                    role    = if (e.role == "user") MessageRole.USER else MessageRole.ASSISTANT
+                    role    = if (e.role == "user") MessageRole.USER else MessageRole.ASSISTANT,
+                    sources = parseSources(e.sources)
                 )
             }
             // A3 — сохраняем в SavedStateHandle
@@ -480,16 +484,40 @@ class ChatViewModel @Inject constructor(
             val forceRemote = _state.value.selectedOnlineProvider != null
                 || settingsRepository.chatForceOnline.first() != null
             var assistantContent = ""
+            var assistantSources: List<String> = emptyList()
+            var assistantRisk: String = "low"
+            var assistantEvac: Boolean = false
             val assistantMsg = ChatMessage(content = "", role = MessageRole.ASSISTANT)
             _state.update { it.copy(messages = it.messages + assistantMsg) }
 
             try {
+                // Троттлинг стриминговых обновлений UI: не чаще чем каждые 40 мс.
+                // Каждый onPartial дёргал MutableStateFlow.update → recompose LazyColumn
+                // на каждый токен (20-50 раз/с), что тормозило UI на слабых девайсах.
+                var lastUpdate = 0L
+                var pendingContent = ""
+                val throttledPartial: (String) -> Unit = { text ->
+                    assistantContent += text
+                    pendingContent = assistantContent
+                    val now = System.currentTimeMillis()
+                    if (now - lastUpdate >= 40L) {
+                        updateLastMessage(pendingContent)
+                        lastUpdate = now
+                    }
+                }
+
                 if (mode == "diagnosis") {
-                    diagnoseUseCase(text, effectiveVehicleId, history, { partial ->
-                        assistantContent += partial
-                        updateLastMessage(assistantContent)
-                    }, forceRemote = forceRemote).collect { result ->
+                    diagnoseUseCase(text, effectiveVehicleId, history, throttledPartial, forceRemote = forceRemote).collect { result ->
+                        // Проталкиваем финальное состояние после завершения стрима
+                        if (pendingContent != assistantContent || pendingContent.isNotEmpty()) {
+                            updateLastMessage(assistantContent)
+                        }
                         result.onSuccess { diag ->
+                            assistantContent = diag.message
+                            assistantSources = diag.sources
+                            assistantRisk = diag.riskLevel
+                            assistantEvac = diag.requiresEvacuation
+                            updateLastMessage(assistantContent, assistantSources)
                             _state.update {
                                 it.copy(isGenerating = false,
                                     riskLevel = diag.riskLevel,
@@ -505,15 +533,15 @@ class ChatViewModel @Inject constructor(
                         "accessory" -> RetrievalMode.ACCESSORY
                         else        -> RetrievalMode.BOTH
                     }
-                    val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history, { partial ->
-                        assistantContent += partial
-                        updateLastMessage(assistantContent)
-                    }, forceRemote = forceRemote)
+                    val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history, throttledPartial, forceRemote = forceRemote)
+                    if (pendingContent != assistantContent) updateLastMessage(assistantContent)
                     _state.update { it.copy(isGenerating = false) }
                     if (result.isFailure) {
                         val errMsg = result.exceptionOrNull()?.message ?: "Неизвестная ошибка"
                         _state.update { it.copy(error = errMsg) }
                         updateLastMessage("❌ Ошибка подключения: $errMsg")
+                    } else {
+                        updateLastMessage(assistantContent, assistantSources)
                     }
                 }
 
@@ -574,19 +602,31 @@ class ChatViewModel @Inject constructor(
                     sessionId = sessionId,
                     role      = if (msg.role == MessageRole.USER) "user" else "assistant",
                     content   = msg.content,
-                    timestamp = msg.timestamp
+                    timestamp = msg.timestamp,
+                    sources   = if (msg.sources.isNotEmpty()) serializeSources(msg.sources) else null
                 )
             )
         }
         chatRepo.updateMeta(id = sessionId, title = title, vehicleName = vehicleName, updatedAt = now)
     }
 
-    private fun updateLastMessage(content: String) {
+    private val sourcesJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private fun serializeSources(sources: List<String>): String =
+        sourcesJson.encodeToString(ListSerializer(String.serializer()), sources)
+    private fun parseSources(raw: String?): List<String> = runCatching {
+        if (raw.isNullOrBlank()) emptyList()
+        else sourcesJson.decodeFromString(ListSerializer(String.serializer()), raw)
+    }.getOrDefault(emptyList())
+
+    private fun updateLastMessage(content: String, sources: List<String> = emptyList()) {
         _state.update { s ->
             val newList = s.messages.toMutableList()
             if (newList.isNotEmpty()) {
                 val last = newList.last()
-                newList[newList.size - 1] = last.copy(content = content)
+                newList[newList.size - 1] = last.copy(
+                    content = content,
+                    sources = if (sources.isNotEmpty()) sources else last.sources
+                )
             }
             s.copy(messages = newList)
         }

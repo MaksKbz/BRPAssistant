@@ -3,15 +3,21 @@ package com.brp.assistant.data.llm
 import com.brp.assistant.data.db.entities.Accessory
 import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.db.entities.KnowledgeCard
+import com.brp.assistant.data.db.entities.KnowledgeChunk
 import com.brp.assistant.domain.model.ChatMessage
 
-class PromptBuilder {
+class PromptBuilder @Inject constructor(
+    private val systemPromptProvider: SystemPromptProvider
+) {
 
     companion object {
         // FIX: ультра-короткий промпт для маленьких офлайн-моделей.
         // Маленькие квантизованные модели (0.5B-1.5B) не справляются с длинными
-        // инструкциями и начинают галлюцинировать. Минимум текста.
-        private const val SYSTEM_PROMPT = """Ты BRP-ассистент. Отвечай кратко на русском."""
+        // инструкциями и начинают галлюцинировать. Однако теперь полноценный
+        // промпт подгружается из assets/prompts/system_prompt.txt через
+        // SystemPromptProvider, а эта константа — лишь запасной вариант.
+        private const val FALLBACK_SYSTEM_PROMPT =
+            "Ты BRP-ассистент. Отвечай кратко на русском. Используй только предоставленные факты."
 
         /**
          * FIX #oom-guard: ограничения контекста для защиты от OOM.
@@ -111,7 +117,7 @@ ${histBlock(history)}
         } else {
             content
         }
-        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
+        return wrapWithStyle(systemPromptProvider.getSystemPrompt(), finalContent, style)
     }
 
     // ============================================================
@@ -165,7 +171,7 @@ ${histBlock(history)}
         } else {
             content
         }
-        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
+        return wrapWithStyle(systemPromptProvider.getSystemPrompt(), finalContent, style)
     }
 
     // ============================================================
@@ -211,7 +217,7 @@ ${histBlock(history)}
         } else {
             content
         }
-        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
+        return wrapWithStyle(systemPromptProvider.getSystemPrompt(), finalContent, style)
     }
 
     // ============================================================
@@ -276,22 +282,25 @@ ${histBlock(history)}
         } else {
             content
         }
-        return wrapWithStyle(SYSTEM_PROMPT, finalContent, style)
+        return wrapWithStyle(systemPromptProvider.getSystemPrompt(), finalContent, style)
     }
 
     private fun wrapWithStyle(system: String, content: String, style: PromptStyle): String {
+        // Для QWEN3 добавляем /no_think чтобы отключить reasoning у моделей
+        // с thinking-tokens (они хуже работают на офлайн-устройствах).
+        val wrappedSystem = if (style == PromptStyle.QWEN3) "$system /no_think" else system
         return when (style) {
             PromptStyle.CHATML -> {
-                "<|im_start|>system\n$system<|im_end|>\n<|im_start|>user\n$content<|im_end|>\n<|im_start|>assistant\n"
+                "<|im_start|>system\n$wrappedSystem<|im_end|>\n<|im_start|>user\n$content<|im_end|>\n<|im_start|>assistant\n"
             }
             PromptStyle.QWEN3 -> {
-                "<|im_start|>system\n$system /no_think<|im_end|>\n<|im_start|>user\n$content<|im_end|>\n<|im_start|>assistant\n"
+                "<|im_start|>system\n$wrappedSystem<|im_end|>\n<|im_start|>user\n$content<|im_end|>\n<|im_start|>assistant\n"
             }
             PromptStyle.PHI3 -> {
-                "<|system|>\n$system<|end|>\n<|user|>\n$content<|end|>\n<|assistant|>\n"
+                "<|system|>\n$wrappedSystem<|end|>\n<|user|>\n$content<|end|>\n<|assistant|>\n"
             }
             PromptStyle.GEMMA -> {
-                "<start_of_turn>user\n$system\n\n$content<end_of_turn>\n<start_of_turn>model\n"
+                "<start_of_turn>user\n$wrappedSystem\n\n$content<end_of_turn>\n<start_of_turn>model\n"
             }
         }
     }
@@ -313,28 +322,93 @@ ${histBlock(history)}
         selectedModel: BrpModel?,
         customSystemPrompt: String = "",
         accessories: List<Accessory> = emptyList(),
-        cards: List<KnowledgeCard> = emptyList()
+        cards: List<KnowledgeCard> = emptyList(),
+        chunks: List<KnowledgeChunk> = emptyList(),
+        userChunks: List<com.brp.assistant.data.rag.UserChunk> = emptyList()
     ): String {
+        val baseSystem = systemPromptProvider.getSystemPrompt()
         val contacts = if (customSystemPrompt.isNotBlank()) "\n$customSystemPrompt" else ""
-        val vehicle = selectedModel?.let { "\nТехника: ${it.brand} ${it.modelName}." } ?: ""
-        
+        val vehicle = selectedModel?.let {
+            "\nТехника клиента: ${it.brand.uppercase()} ${it.modelName} ${it.modelYear}. " +
+                "Двигатель: ${it.engineName ?: "N/A"}. " +
+                "Платформа: ${it.platform ?: "N/A"}."
+        } ?: "\nКлиент пока не выбрал технику — можно кратко уточнить модель BRP."
+
         val accSection = if (accessories.isNotEmpty()) {
-            "\nДоступные аксессуары BRP:\n" + accessories.take(4).joinToString("\n") { "- ${it.name} (арт. ${it.sku})" }
-        } else ""
-        
-        val cardsSection = if (cards.isNotEmpty()) {
-            "\nСправка из базы BRP:\n" + cards.take(2).joinToString("\n") { "- ${it.symptom}: ${it.fullText.take(250)}" }
+            "\nОРИГИНАЛЬНЫЕ АКСЕССУАРЫ ИЗ КАТАЛОГА BRP:\n" + accessories.take(4).joinToString("\n") {
+                buildString {
+                    append("- ${it.name}")
+                    append(" | SKU: ${it.sku}")
+                    if (it.msrpUsd != null) append(" | \$${it.msrpUsd}")
+                    if (it.requiresProfessionalInstall == 1) append(" | ⚠️ установка у дилера")
+                }
+            }
         } else ""
 
-        val system = if (accessories.isNotEmpty()) {
-            "Ты официальный BRP-ассистент. Отвечай уверенно и чётко на русском языке. Для перевозки рекомендуй пользователю подходящие оригинальные аксессуары из списка ниже с указанием их артикулов (SKU). Не отправляй пользователя в колл-центр, так как в твоей базе уже есть точные детали."
-        } else {
-            "Ты BRP-ассистент. Отвечай кратко, чётко и строго по сути вопроса на русском языке.$contacts"
-        }
-        val content = "$vehicle$accSection$cardsSection\nВопрос: $userMessage"
+        // Чанки встроенных карточек BRP — в сжатом виде
+        val chunksSection = if (chunks.isNotEmpty()) {
+            "\nФРАГМЕНТЫ ИЗ БАЗЫ BRP:\n" +
+                chunks.take(4).distinctBy { it.cardId + (it.section ?: "") }.joinToString("\n\n") { ch ->
+                    val body = ch.content
+                        .replace(Regex("^[\\s*#\\-•\\d\\.]+"), "")
+                        .replace(Regex("\\n{2,}"), "\n")
+                        .take(450)
+                    "[${ch.section ?: "Фрагмент"}] ${body.trim()}"
+                }
+        } else ""
+
+        // Чанки ПОЛЬЗОВАТЕЛЬСКИХ документов — с указанием имени документа
+        val userChunksSection = if (userChunks.isNotEmpty()) {
+            "\nИЗ ВАШЕЙ БАЗЫ ЗНАНИЙ:\n" +
+                userChunks.take(4).distinctBy { it.chunk.id }.joinToString("\n\n") { uc ->
+                    val body = uc.chunk.content
+                        .replace(Regex("^[\\s*#\\-•\\d\\.]+"), "")
+                        .replace(Regex("\\n{2,}"), "\n")
+                        .take(450)
+                    "[${uc.docName} / ${uc.chunk.section ?: "Фрагмент"}] ${body.trim()}"
+                }
+        } else ""
+
+        val cardsSection = if (cards.isNotEmpty()) {
+            "\nИНСТРУКЦИИ ПО СВЯЗАННЫМ ПРОБЛЕМАМ:\n" +
+                cards.take(if (chunks.isEmpty()) 3 else 2).joinToString("\n\n") { c ->
+                    buildString {
+                        append("【${c.symptom}】")
+                        append(" (${c.brand}/${c.equipmentType}, риск: ${c.riskLevel})")
+                        if (c.causes.isNotBlank() && c.causes != "[]")
+                            append("\nПричины: ${stripJsonList(c.causes).take(240)}")
+                        if (c.canDo.isNotBlank() && c.canDo != "[]")
+                            append("\nЧто делать: ${stripJsonList(c.canDo).take(240)}")
+                        if (c.mustNotDo.isNotBlank() && c.mustNotDo != "[]")
+                            append("\nНЕЛЬЗЯ: ${stripJsonList(c.mustNotDo).take(180)}")
+                    }
+                }
+        } else ""
+
+        val modeHint = if (accessories.isNotEmpty()) {
+            "\nРЕЖИМ: Подбор аксессуаров. Укажи SKU и совместимость с техникой клиента."
+        } else if (cards.isNotEmpty()) {
+            "\nРЕЖИМ: Диагностика/ремонт. Дай пошаговые действия на русском. Начни с безопасности. " +
+                "Если риск high/critical — предупреди в первой строке. Не выдумывай ничего сверх инструкций."
+        } else ""
+
+        val system = "$baseSystem$contacts\nКраткость: отвечай по существу, 3–6 пунктов. Используй приведённые факты. Если информация есть в «ВАШЕЙ БАЗЕ ЗНАНИЙ» — приоритет ей."
+        val content = "$vehicle$chunksSection$userChunksSection$cardsSection$accSection$modeHint\n\nВОПРОС КЛИЕНТА: $userMessage"
 
         return wrapWithStyle(system, content, PromptStyle.CHATML)
     }
+
+    /**
+     * Конвертирует JSON-массив вида `["один","два"]` в простую строку "один; два".
+     * Используется при рендеринге полей [KnowledgeCard] в промпт для LLM.
+     */
+    private fun stripJsonList(json: String): String = runCatching {
+        val content = json.trim().removeSurrounding("[", "]")
+        if (content.isBlank()) ""
+        else content.split(",").joinToString("; ") {
+            it.trim().removeSurrounding("\"").removeSurrounding("'")
+        }
+    }.getOrDefault(json)
 
     // ============================================================
     // КОНСУЛЬТАНТ ПО JSON

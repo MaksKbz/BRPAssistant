@@ -128,7 +128,36 @@ data class AccessoryCompatibility(
 )
 
 // ============================================================
-// FTS for knowledge search
+// KNOWLEDGE CHUNKS — мелкие фрагменты карточек знаний
+// Разбиение markdown-карточек по H2/H3-секциям позволяет точнее
+// находить релевантный контент (не всю карточку целиком, а только
+// нужный раздел с причинами/шагами/предупреждениями).
+// ============================================================
+@Entity(
+    tableName = "knowledge_chunks",
+    foreignKeys = [
+        ForeignKey(
+            entity = KnowledgeCard::class,
+            parentColumns = ["id"],
+            childColumns = ["cardId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("cardId"), Index("brand"), Index("equipmentType")]
+)
+data class KnowledgeChunk(
+    @PrimaryKey val id: String,
+    val cardId: String,
+    val brand: String,
+    val equipmentType: String,
+    val modelFamily: String? = null,
+    val node: String? = null,
+    val section: String? = null,
+    val content: String
+)
+
+// ============================================================
+// FTS for knowledge search (карточки целиком)
 // ============================================================
 @Fts4(
     contentEntity = KnowledgeCard::class,
@@ -140,4 +169,68 @@ data class KnowledgeCardFts(
     val symptom: String,
     val id: String,
     val causes: String
+)
+
+// ============================================================
+// USER DOCUMENTS (пользовательская база знаний)
+//
+// Документы, которые пользователь загрузил в приложение (.md/.txt).
+// Чанки пользовательских документов участвуют в RAG-поиске наравне
+// со встроенными карточками, помечены флагом userGenerated.
+// ============================================================
+@Entity(tableName = "user_documents")
+data class UserDocument(
+    @PrimaryKey val id: String,
+    val displayName: String,
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val addedAt: Long,
+    val chunkCount: Int = 0
+)
+
+@Entity(
+    tableName = "user_document_chunks",
+    foreignKeys = [
+        ForeignKey(
+            entity = UserDocument::class,
+            parentColumns = ["id"],
+            childColumns = ["documentId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("documentId")]
+)
+data class UserDocumentChunk(
+    @PrimaryKey val id: String,
+    val documentId: String,
+    val section: String? = null,
+    val content: String
+)
+
+@Fts4(
+    contentEntity = UserDocumentChunk::class,
+    tokenizer = FtsOptions.TOKENIZER_UNICODE61
+)
+@Entity(tableName = "user_document_chunks_fts")
+data class UserDocumentChunkFts(
+    val content: String,
+    val section: String?,
+    val id: String,
+    val documentId: String
+)
+
+// ============================================================
+// FTS for knowledge chunks (для поиска по отдельным секциям)
+// ============================================================
+@Fts4(
+    contentEntity = KnowledgeChunk::class,
+    tokenizer = FtsOptions.TOKENIZER_UNICODE61
+)
+@Entity(tableName = "knowledge_chunks_fts")
+data class KnowledgeChunkFts(
+    val content: String,
+    val section: String?,
+    val id: String,
+    val cardId: String
 )

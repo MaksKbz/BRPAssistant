@@ -692,6 +692,7 @@ private fun MessageBubble(message: ChatMessage) {
     val isUser = message.role == MessageRole.USER
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
+    var sourcesExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -737,6 +738,61 @@ private fun MessageBubble(message: ChatMessage) {
                         else
                             MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+        }
+
+        // ── Источники (карточки БЗ) ──────────────────────────────────
+        if (!isUser && message.sources.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .padding(start = 4.dp, end = 48.dp)
+                    .clickable { sourcesExpanded = !sourcesExpanded }
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.MenuBook,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Источники: ${message.sources.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Icon(
+                            if (sourcesExpanded) Icons.Default.ExpandLess
+                            else Icons.Default.ExpandMore,
+                            contentDescription = if (sourcesExpanded) "Свернуть" else "Развернуть",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                    if (sourcesExpanded) {
+                        Spacer(Modifier.height(4.dp))
+                        message.sources.take(5).forEach { src ->
+                            Text(
+                                "• $src",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                            )
+                        }
+                        if (message.sources.size > 5) {
+                            Text(
+                                "…и ещё ${message.sources.size - 5}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
                 }
             }
         }

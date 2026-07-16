@@ -26,5 +26,6 @@ data class ChatMessageEntity(
     val sessionId: String,
     val role: String,                    // "user" | "assistant"
     val content: String,
-    val timestamp: Long                  // epoch millis
+    val timestamp: Long,                 // epoch millis
+    val sources: String? = null          // JSON-массив источников (карточки БЗ)
 )

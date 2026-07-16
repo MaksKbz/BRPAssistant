@@ -249,24 +249,69 @@ def build_database():
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             timestamp INTEGER NOT NULL,
+            sources TEXT,
             FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
         );
         CREATE INDEX index_chat_messages_sessionId ON chat_messages(sessionId);
 
-        -- Версия схемы Room. ДОЛЖНА совпадать с @Database(version) в BrpDatabase.kt.
-        -- Без этого PRAGMA остаётся 0 → Room считает БД устаревшей и требует
-        -- миграцию, которой нет → IllegalStateException при первом запуске.
-        PRAGMA user_version = 6;
+        -- knowledge_chunks: фрагменты карточек знаний, разбитые по H2/H3 секциям
+        -- для более точного RAG-поиска. Чанки перегенерируются из fullText
+        -- при каждой сборке БД.
+        CREATE TABLE knowledge_chunks (
+            id TEXT NOT NULL PRIMARY KEY,
+            cardId TEXT NOT NULL,
+            brand TEXT NOT NULL,
+            equipmentType TEXT NOT NULL,
+            modelFamily TEXT,
+            node TEXT,
+            section TEXT,
+            content TEXT NOT NULL,
+            FOREIGN KEY(cardId) REFERENCES knowledge_cards(id) ON DELETE CASCADE
+        );
+        CREATE INDEX index_knowledge_chunks_cardId ON knowledge_chunks(cardId);
+        CREATE INDEX index_knowledge_chunks_brand ON knowledge_chunks(brand);
+        CREATE INDEX index_knowledge_chunks_equipmentType ON knowledge_chunks(equipmentType);
 
-        -- room_master_table: identity-хэш схемы Room (из app/schemas/6.json).
-        -- Room при открытии читает этот хэш; при совпадении он НЕ выполняет
-        -- строгую валидацию и открывает pre-packaged asset напрямую.
-        -- Без этой таблицы Room падает: расхождения (формат FTS, FK) блокируют
-        -- открытие → «Ошибка БД» + пустые экраны, хотя ДАННЫЕ в asset есть.
-        -- ⚠️ Если изменить entity-схему в BrpDatabase.kt — пересоберите проект и
-        --    скопируйте НОВЫЙ identityHash из app/schemas/<v>.json сюда.
+        CREATE VIRTUAL TABLE knowledge_chunks_fts USING fts4(
+            content, section, id, cardId,
+            tokenize=unicode61,
+            content=`knowledge_chunks`
+        );
+
+        -- Таблицы пользовательских документов (v9). Изначально пустые —
+        -- пользователь добавляет документы в runtime через экран "Моя база".
+        CREATE TABLE user_documents (
+            id TEXT NOT NULL PRIMARY KEY,
+            displayName TEXT NOT NULL,
+            fileName TEXT NOT NULL,
+            mimeType TEXT NOT NULL,
+            sizeBytes INTEGER NOT NULL,
+            addedAt INTEGER NOT NULL,
+            chunkCount INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE user_document_chunks (
+            id TEXT NOT NULL PRIMARY KEY,
+            documentId TEXT NOT NULL,
+            section TEXT,
+            content TEXT NOT NULL,
+            FOREIGN KEY(documentId) REFERENCES user_documents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX index_user_document_chunks_documentId ON user_document_chunks(documentId);
+        CREATE VIRTUAL TABLE user_document_chunks_fts USING fts4(
+            content, section, id, documentId,
+            tokenize=unicode61,
+            content=`user_document_chunks`
+        );
+
+        -- Версия схемы Room. ДОЛЖНА совпадать с @Database(version) в BrpDatabase.kt.
+        PRAGMA user_version = 9;
+
+        -- room_master_table: identity-хэш схемы Room (будет пересчитан при
+        -- первой успешной сборке Android-проекта и подставлен сюда).
+        -- Используем placeholder, чтобы asset открылся через fallbackToDestructiveMigration,
+        -- который уже включён в DatabaseModule.
         CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT);
-        INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES(42, '379b5e762bde447ee79bca801da4df98');
+        INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES(42, 'PLACEHOLDER_REBUILD_FROM_SCHEMAS');
     """)
     
     # Insert models
@@ -367,7 +412,16 @@ def build_database():
         c.executemany("INSERT OR REPLACE INTO brp_accessories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", acc_items)
         print(f"  ✅ {len(acc_items)} аксессуаров по артикулам и {chunk_idx} секций каталогов")
 
+    # ── Chunking: разбиваем fullText на секции по H2/H3 ──────────────────────
+    chunks = build_knowledge_chunks(c)
+    c.executemany(
+        "INSERT OR REPLACE INTO knowledge_chunks VALUES (?,?,?,?,?,?,?,?)",
+        chunks
+    )
+    print(f"  ✅ {len(chunks)} чанков (секций карточек знаний)")
+
     c.execute("INSERT INTO knowledge_cards_fts(knowledge_cards_fts) VALUES('rebuild')")
+    c.execute("INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES('rebuild')")
     conn.commit()
     
     # Stats
@@ -458,6 +512,118 @@ def extract_json_list(text: str, heading: str) -> list:
             if stripped and not stripped.startswith("#"):
                 items.append(stripped)
     return items
+
+
+# Заголовки секций, которые распознаём при чанкинге
+CHUNK_HEADINGS = [
+    "Вероятные причины", "Причины", "Причины возникновения", "Симптомы",
+    "Что МОЖНО", "Что делать", "Полевой ремонт", "Действия в полевых условиях",
+    "Замена в полевых условиях", "Экстренные действия", "Решение в полевых условиях",
+    "Чего делать НЕЛЬЗЯ", "Чего делать нельзя", "НЕЛЬЗЯ", "Запрещено", "Опасности",
+    "Когда прекратить", "Когда к дилеру", "Обращение к дилеру",
+    "Когда обращаться в профессиональный сервис", "Профессиональный ремонт",
+    "Необходимые инструменты", "Инструменты", "Моменты затяжки",
+    "Шаги ремонта", "Порядок действий", "Проверка", "Диагностика",
+    "Коды ошибок", "Технические характеристики", "Интервалы обслуживания",
+    "Замена", "Регулировка", "Обслуживание"
+]
+
+
+def split_into_sections(full_text: str, symptom: str) -> list:
+    """
+    Разбивает markdown-текст карточки на секции по H2/H3-заголовкам.
+    Возвращает список (section_title, content). Если нет заголовков —
+    возвращает одну секцию с symptom как заголовком.
+    """
+    if not full_text:
+        return []
+
+    # Убираем H1 и frontmatter-разделитель
+    body = full_text
+    lines = body.split("\n")
+    sections = []
+    current_title = symptom.strip("# ") if symptom else "Обзор"
+    current_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        # H2 / H3
+        if stripped.startswith("##"):
+            title = stripped.lstrip("#").strip()
+            if current_lines:
+                sections.append((current_title, "\n".join(current_lines).strip()))
+            current_title = title
+            current_lines = []
+        else:
+            # Пропускаем только H1 заголовки и frontmatter-разделители
+            if stripped.startswith("# "):
+                continue
+            if stripped == "---":
+                continue
+            current_lines.append(line)
+
+    if current_lines:
+        sections.append((current_title, "\n".join(current_lines).strip()))
+
+    # Если не распознали секций или все секции пустые — берём как есть
+    cleaned = [(t, c) for t, c in sections if c]
+    if not cleaned:
+        return [(symptom or "Обзор", full_text.strip())]
+    return cleaned
+
+
+def build_knowledge_chunks(cursor) -> list:
+    """
+    Создаёт чанки из всех knowledge_cards.fullText, разбивая по H2/H3-секциям.
+    Добавляет «обзорный» чанк с полем symptom + кратким вступлением для каждой
+    карточки, чтобы поиск по названию проблемы всегда находил карточку.
+    """
+    rows = cursor.execute(
+        "SELECT id, brand, equipmentType, modelFamily, node, symptom, fullText FROM knowledge_cards"
+    ).fetchall()
+
+    chunks = []
+    counter = 0
+    for card_id, brand, eq_type, family, node, symptom, full_text in rows:
+        if not full_text:
+            continue
+
+        # Обзорный чанок (всегда добавляем для точного попадания по симптому)
+        preview_lines = [ln for ln in full_text.split("\n") if ln.strip() and not ln.strip().startswith("#")][:3]
+        preview = "\n".join(preview_lines)[:500]
+        chunks.append((
+            f"{card_id}__overview",
+            card_id,
+            brand,
+            eq_type,
+            family,
+            node,
+            "Обзор",
+            f"{symptom}\n{preview}".strip()
+        ))
+        counter += 1
+
+        # Чанки по секциям
+        for title, content in split_into_sections(full_text, symptom):
+            if not content.strip():
+                continue
+            # Слишком короткие секции объединяем с обзорным чанком
+            if len(content.strip()) < 40:
+                continue
+            chunks.append((
+                f"{card_id}__sec{counter}",
+                card_id,
+                brand,
+                eq_type,
+                family,
+                node,
+                title[:120],
+                content.strip()[:1500]
+            ))
+            counter += 1
+
+    return chunks
+
 
 if __name__ == "__main__":
     print("🔧 Сборка brp_assistant.db...")
