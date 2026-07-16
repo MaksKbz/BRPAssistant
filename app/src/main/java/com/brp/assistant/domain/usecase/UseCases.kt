@@ -73,14 +73,15 @@ class DiagnoseUseCase @Inject constructor(
 
             val brpModel = vehicleId?.let { modelRepository.getById(it) }
 
-            // RAG: пропускаем для простых вопросов и для ЛОКАЛЬНЫХ моделей
+            // RAG: для простых вопросов (приветствия/благодарности) поиск не нужен.
             val simple = isSimpleQuestion(message)
-            val cards = if (simple || !useRemote) {
-                emptyList()
-            } else {
-                retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId).cards.map { it.card }
-            }
+            val retrieval = if (simple) null
+                else retriever.retrieve(message, RetrievalMode.DIAGNOSIS, vehicleId, topK = if (useRemote) 7 else 3)
+            val cards = retrieval?.cards?.map { it.card } ?: emptyList()
+            val matchedChunks = retrieval?.matchedChunks ?: emptyList()
+            val userChunks = retrieval?.userChunks ?: emptyList()
 
+            // Если симптом полностью совпал с названием карточки — даём готовый ответ
             if (cards.any { it.symptom.contains(message, ignoreCase = true) }) {
                 val bestMatch = cards.first { it.symptom.contains(message, ignoreCase = true) }
                 val predefinedAnswer = "🤖 **Готовое решение:**\n\n${bestMatch.fullText}"
@@ -94,13 +95,15 @@ class DiagnoseUseCase @Inject constructor(
                 return@flow
             }
 
-            // ЛОКАЛЬНАЯ: компактный промпт с топ-2 картами (без перегрузки)
+            // ЛОКАЛЬНАЯ: компактный промпт с топ-3 картами + релевантные чанки
             if (!useRemote) {
                 val localPrompt = promptBuilder.buildLocalChatPrompt(
                     userMessage = message,
                     selectedModel = brpModel,
                     customSystemPrompt = systemPrompt,
-                    cards = cards.take(2)
+                    cards = cards.take(3),
+                    chunks = matchedChunks.take(4),
+                    userChunks = userChunks.take(4)
                 )
                 val localResult = llm.generateResponse(localPrompt, onPartial)
                 localResult.onSuccess { text ->
@@ -190,28 +193,45 @@ class ChatUseCase @Inject constructor(
         }
 
         val brpModel = vehicleId?.let { modelRepository.getById(it) }
-        val retrieval = retriever.retrieve(message, mode, vehicleId)
-        val cards = retrieval.cards.map { it.card }
-        val accessories = retrieval.accessories.map { it.accessory }
+        val simple = isSimpleQuestion(message)
+        val retrieval = if (simple) null
+            else retriever.retrieve(message, mode, vehicleId, topK = if (useRemote) 7 else 3)
+        val cards = retrieval?.cards?.map { it.card } ?: emptyList()
+        val chunks = retrieval?.matchedChunks ?: emptyList()
+        val userChunks = retrieval?.userChunks ?: emptyList()
+        val accessories = retrieval?.accessories?.map { it.accessory } ?: run {
+            if (mode == RetrievalMode.ACCESSORY)
+                retriever.retrieve(message, mode, vehicleId).accessories.map { it.accessory }
+            else emptyList()
+        }
 
         // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: компактный сфокусированный промпт.
-        // Передаём только топ-4 аксессуара или топ-2 справки без лишних заголовков.
         if (!useRemote) {
             val localPrompt = promptBuilder.buildLocalChatPrompt(
                 userMessage = message,
                 selectedModel = brpModel,
                 customSystemPrompt = systemPrompt,
-                accessories = accessories,
-                cards = cards
+                accessories = accessories.take(4),
+                cards = cards.take(3),
+                chunks = chunks.take(4),
+                userChunks = userChunks.take(4)
             )
             return llm.generateResponse(localPrompt, onPartial)
         }
 
+        // ОНЛАЙН: полный промпт с RAG
+        val fullRetrieval = retriever.retrieve(message, mode, vehicleId)
+        val fullCards = fullRetrieval.cards.map { it.card }.ifEmpty { cards }
+        val fullAccessories = fullRetrieval.accessories.map { it.accessory }.ifEmpty { accessories }
+        val fullUserChunks = fullRetrieval.userChunks.ifEmpty { userChunks }
+        @Suppress("UNUSED_VARIABLE")
+        val fullChunks = fullRetrieval.matchedChunks
+
         val prompt = promptBuilder.buildFreeChatPrompt(
             userMessage = message,
             history = history,
-            cards = cards,
-            accessories = accessories,
+            cards = fullCards,
+            accessories = fullAccessories,
             selectedModel = brpModel,
             style = llm.getActivePromptStyle(),
             customSystemPrompt = systemPrompt

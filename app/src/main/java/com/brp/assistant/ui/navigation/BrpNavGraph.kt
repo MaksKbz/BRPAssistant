@@ -29,6 +29,7 @@ import com.brp.assistant.ui.chat.ChatViewModel
 import com.brp.assistant.ui.compare.CompareScreen
 import com.brp.assistant.ui.compare.CompareViewModel
 import com.brp.assistant.ui.diagnose.DiagnoseScreen
+import com.brp.assistant.ui.docs.UserDocsScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
 import com.brp.assistant.ui.model.ModelManagerViewModel
@@ -42,6 +43,7 @@ import java.lang.ref.WeakReference
 
 sealed class Screen(val route: String, val label: String) {
     data object ModelManager  : Screen("model-manager",  "Настройки ИИ")
+    data object UserDocs      : Screen("user-docs",      "Моя база")
     data object Home          : Screen("home",           "Главная")
     data object Situations    : Screen("situations",     "Инструкции")
     data object Maintenance   : Screen("maintenance",    "Регламент")
@@ -512,6 +514,7 @@ private fun NavHostContent(
                 onNavigateToSituations  = { navController.navigate(Screen.Situations.route) },
                 onNavigateToVehicle     = { navController.navigate(Screen.VehicleSelect.route) },
                 onNavigateToModel       = { navController.navigate(Screen.ModelManager.route) },
+                onNavigateToUserDocs    = { navController.navigate(Screen.UserDocs.route) },
                 onNavigateToSettings    = { navController.navigate(Screen.ModelManager.route) }
             )
         }
@@ -701,6 +704,11 @@ private fun NavHostContent(
                 onClearError         = { modelVm.clearError() },
                 onNavigate           = { route -> navigateSafe(navController, route) },
                 onBack               = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.UserDocs.route) {
+            UserDocsScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

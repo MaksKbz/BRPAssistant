@@ -3,6 +3,7 @@ package com.brp.assistant.di
 import android.content.Context
 import androidx.work.WorkManager
 import com.brp.assistant.data.llm.PromptBuilder
+import com.brp.assistant.data.llm.SystemPromptProvider
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -27,9 +28,10 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
-    @Provides
-    @Singleton
-    fun providePromptBuilder(): PromptBuilder = PromptBuilder()
+    /**
+     * [PromptBuilder] и [SystemPromptProvider] создаются через @Inject constructor —
+     * явные @Provides методы для них больше не нужны.
+     */
 
     /**
      * FIX #12: единственный OkHttpClient на всё приложение.

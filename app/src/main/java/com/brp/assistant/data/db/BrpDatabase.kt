@@ -103,26 +103,206 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+/**
+ * v6 → v7: добавляем таблицу чанков знаний [KnowledgeChunk] и FTS для неё.
+ * Чанки — это фрагменты markdown-карточек, разбитые по H2/H3 секциям.
+ * Это позволяет делать более точный RAG-поиск и подмешивать в промпт
+ * только нужный раздел карточки, а не весь текст.
+ *
+ * Данные в чанки будут перезаполнены при следующем запуске после миграции
+ * (они производны от knowledge_cards.fullText, пользовательских данных нет).
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `knowledge_chunks` (
+                `id` TEXT NOT NULL,
+                `cardId` TEXT NOT NULL,
+                `brand` TEXT NOT NULL,
+                `equipmentType` TEXT NOT NULL,
+                `modelFamily` TEXT,
+                `node` TEXT,
+                `section` TEXT,
+                `content` TEXT NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`cardId`) REFERENCES `knowledge_cards`(`id`) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_cardId` ON `knowledge_chunks` (`cardId`)")
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_brand` ON `knowledge_chunks` (`brand`)")
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_equipmentType` ON `knowledge_chunks` (`equipmentType`)")
+        database.execSQL(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS `knowledge_chunks_fts` USING FTS4(
+                `content` TEXT,
+                `section` TEXT,
+                `id` TEXT UNINDEXED,
+                `cardId` TEXT UNINDEXED,
+                tokenize=unicode61,
+                content=`knowledge_chunks`
+            )
+            """.trimIndent()
+        )
+    }
+}
+
+/**
+ * v7 → v8: добавляем столбец `sources` в chat_messages для хранения
+ * ссылок на карточки БЗ, на основании которых был сгенерирован ответ.
+ * ALTER TABLE с DEFAULT NULL безопасен для существующих строк.
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE chat_messages ADD COLUMN sources TEXT")
+    }
+}
+
+/**
+ * v8 → v9: пользовательские документы (user_documents + чанки + FTS).
+ * Это таблицы для хранения загружаемой пользователем базы знаний (.md/.txt).
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `user_documents` (
+                `id` TEXT NOT NULL PRIMARY KEY,
+                `displayName` TEXT NOT NULL,
+                `fileName` TEXT NOT NULL,
+                `mimeType` TEXT NOT NULL,
+                `sizeBytes` INTEGER NOT NULL,
+                `addedAt` INTEGER NOT NULL,
+                `chunkCount` INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent()
+        )
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `user_document_chunks` (
+                `id` TEXT NOT NULL PRIMARY KEY,
+                `documentId` TEXT NOT NULL,
+                `section` TEXT,
+                `content` TEXT NOT NULL,
+                FOREIGN KEY(`documentId`) REFERENCES `user_documents`(`id`) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_user_document_chunks_documentId` ON `user_document_chunks` (`documentId`)")
+        database.execSQL(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS `user_document_chunks_fts` USING FTS4(
+                `content` TEXT,
+                `section` TEXT,
+                `id` TEXT UNINDEXED,
+                `documentId` TEXT UNINDEXED,
+                tokenize=unicode61,
+                content=`user_document_chunks`
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
     entities = [
         BrpModel::class,
         Accessory::class,
         KnowledgeCard::class,
         KnowledgeCardFts::class,
+        KnowledgeChunk::class,
+        KnowledgeChunkFts::class,
         FaultCode::class,
         AccessoryCompatibility::class,
         ChatSessionEntity::class,
-        ChatMessageEntity::class
+        ChatMessageEntity::class,
+        UserDocument::class,
+        UserDocumentChunk::class,
+        UserDocumentChunkFts::class
     ],
-    version = 6,
+    version = 9,
     exportSchema = true  // FIX: false → true; Room теперь верифицирует Migration на этапе компиляции
 )
 abstract class BrpDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
+    abstract fun knowledgeChunkDao(): KnowledgeChunkDao
     abstract fun faultCodeDao(): FaultCodeDao
     abstract fun chatSessionDao(): ChatSessionDao
+}
+
+@Dao
+interface KnowledgeChunkDao {
+    @Query("SELECT * FROM knowledge_chunks ORDER BY brand, equipmentType")
+    suspend fun getAll(): List<KnowledgeChunk>
+
+    @Query("""
+        SELECT kc.* FROM knowledge_chunks kc
+        JOIN knowledge_chunks_fts fts ON kc.id = fts.id
+        WHERE knowledge_chunks_fts MATCH :query
+        ORDER BY rank
+        LIMIT :limit
+    """)
+    suspend fun searchFullText(query: String, limit: Int = 10): List<KnowledgeChunk>
+
+    @Query("SELECT * FROM knowledge_chunks WHERE cardId = :cardId ORDER BY id")
+    suspend fun getByCardId(cardId: String): List<KnowledgeChunk>
+
+    @Query("DELETE FROM knowledge_chunks")
+    suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM knowledge_chunks")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(chunks: List<KnowledgeChunk>)
+}
+
+@Dao
+interface UserDocumentDao {
+    @Query("SELECT * FROM user_documents ORDER BY addedAt DESC")
+    suspend fun getAll(): List<UserDocument>
+
+    @Query("SELECT * FROM user_documents WHERE id = :id")
+    suspend fun getById(id: String): UserDocument?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(doc: UserDocument)
+
+    @Query("DELETE FROM user_documents WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM user_documents")
+    suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM user_documents")
+    suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM user_document_chunks")
+    suspend fun countChunks(): Int
+
+    @Query("DELETE FROM user_document_chunks WHERE documentId = :documentId")
+    suspend fun deleteChunksByDoc(documentId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChunks(chunks: List<UserDocumentChunk>)
+
+    @Query("""
+        SELECT udc.* FROM user_document_chunks udc
+        JOIN user_document_chunks_fts fts ON udc.id = fts.id
+        WHERE user_document_chunks_fts MATCH :query
+        ORDER BY rank
+        LIMIT :limit
+    """)
+    suspend fun searchChunks(query: String, limit: Int = 10): List<UserDocumentChunk>
+
+    @Query("SELECT * FROM user_document_chunks WHERE documentId = :docId ORDER BY id")
+    suspend fun getChunksByDoc(docId: String): List<UserDocumentChunk>
+
+    @Query("SELECT * FROM user_document_chunks ORDER BY id LIMIT :limit")
+    suspend fun getAllChunks(limit: Int = 500): List<UserDocumentChunk>
 }
 
 @Dao

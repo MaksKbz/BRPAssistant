@@ -46,7 +46,7 @@ object DatabaseModule {
             "brp_assistant_v27.db"
         )
             .createFromAsset("brp_assistant.db")
-            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             .fallbackToDestructiveMigration()
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
@@ -55,6 +55,8 @@ object DatabaseModule {
     @Provides fun provideModelDao(db: BrpDatabase): ModelDao = db.modelDao()
     @Provides fun provideAccessoryDao(db: BrpDatabase): AccessoryDao = db.accessoryDao()
     @Provides fun provideKnowledgeDao(db: BrpDatabase): KnowledgeDao = db.knowledgeDao()
+    @Provides fun provideKnowledgeChunkDao(db: BrpDatabase): KnowledgeChunkDao = db.knowledgeChunkDao()
+    @Provides fun provideUserDocumentDao(db: BrpDatabase): UserDocumentDao = db.userDocumentDao()
     @Provides fun provideFaultCodeDao(db: BrpDatabase): FaultCodeDao = db.faultCodeDao()
     @Provides fun provideChatSessionDao(db: BrpDatabase): ChatSessionDao = db.chatSessionDao()
 

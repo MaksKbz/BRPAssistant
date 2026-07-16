@@ -3,8 +3,13 @@ package com.brp.assistant
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.brp.assistant.data.rag.KnowledgeChunkInitializer
 import com.brp.assistant.domain.AppHealthChecker
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 // FIX #2: App реализует Configuration.Provider для HiltWorkerFactory
@@ -34,11 +39,24 @@ class App : Application(), Configuration.Provider {
     @Inject
     lateinit var healthChecker: AppHealthChecker
 
+    @Inject
+    lateinit var chunkInitializer: KnowledgeChunkInitializer
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun onCreate() {
         super.onCreate()
         // #10: healthChecker.runChecks() — подключён здесь.
         // Статус доступен всем подписчикам через healthChecker.status StateFlow.
         healthChecker.runChecks()
+
+        // При первом запуске (или после миграции на v7) заполняем таблицу
+        // knowledge_chunks из markdown-карточек. Это фоновая операция,
+        // не блокирует старт UI.
+        appScope.launch {
+            runCatching { chunkInitializer.ensureChunksPopulated() }
+                .onFailure { it.printStackTrace() }
+        }
     }
 
     override val workManagerConfiguration: Configuration
