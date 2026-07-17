@@ -243,7 +243,6 @@ interface KnowledgeChunkDao {
         SELECT kc.* FROM knowledge_chunks kc
         JOIN knowledge_chunks_fts fts ON kc.id = fts.id
         WHERE knowledge_chunks_fts MATCH :query
-        ORDER BY rank
         LIMIT :limit
     """)
     suspend fun searchFullText(query: String, limit: Int = 10): List<KnowledgeChunk>
@@ -294,7 +293,6 @@ interface UserDocumentDao {
         SELECT udc.* FROM user_document_chunks udc
         JOIN user_document_chunks_fts fts ON udc.id = fts.id
         WHERE user_document_chunks_fts MATCH :query
-        ORDER BY rank
         LIMIT :limit
     """)
     suspend fun searchChunks(query: String, limit: Int = 10): List<UserDocumentChunk>
