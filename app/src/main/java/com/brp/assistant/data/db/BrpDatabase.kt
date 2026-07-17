@@ -229,6 +229,7 @@ abstract class BrpDatabase : RoomDatabase() {
     abstract fun accessoryDao(): AccessoryDao
     abstract fun knowledgeDao(): KnowledgeDao
     abstract fun knowledgeChunkDao(): KnowledgeChunkDao
+    abstract fun userDocumentDao(): UserDocumentDao
     abstract fun faultCodeDao(): FaultCodeDao
     abstract fun chatSessionDao(): ChatSessionDao
 }
