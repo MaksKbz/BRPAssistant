@@ -10,6 +10,7 @@ import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.llm.RemoteLlmEngine
 import com.brp.assistant.data.llm.download.ModelDownloadState
 import com.brp.assistant.data.llm.download.PublicHuggingFaceModelDownloader
+import com.brp.assistant.domain.usecase.RecommendLlmModeUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,12 +31,6 @@ data class ModelManagerState(
     val activeModelId: String? = null,
     val downloadingModelId: String? = null,
     val downloadProgress: Float = 0f,
-    /**
-     * FIX #4: индикация загрузки модели в память.
-     * На устройствах с eMMC 5.1 (старые Xiaomi, Oppo и др.) активация
-     * модели занимает 5–30 секунд. Без этого флага UI «замирает» без
-     * каких-либо визуальных признаков прогресса.
-     */
     val isActivating: Boolean = false,
     val activatingModelId: String? = null,
     val error: String? = null,
@@ -46,7 +41,9 @@ data class ModelManagerState(
     val aiSystemPrompt: String = "",
     val aiTemperature: Float = 0.7f,
     val isValidating: Boolean = false,
-    val validationResult: String? = null
+    val validationResult: String? = null,
+    val pendingWarning: String? = null,
+    val pendingModelToDownload: OfflineModelInfo? = null
 )
 
 @HiltViewModel
@@ -56,7 +53,8 @@ class ModelManagerViewModel @Inject constructor(
     private val downloader: PublicHuggingFaceModelDownloader,
     private val customModelManager: CustomModelManager,
     private val remoteLlm: RemoteLlmEngine,
-    private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository
+    private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository,
+    private val recommendLlmModeUseCase: RecommendLlmModeUseCase
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ModelManagerState())
@@ -64,6 +62,7 @@ class ModelManagerViewModel @Inject constructor(
 
     private var downloadJob: Job? = null
     private var activateJob: Job? = null
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         refreshModels()
@@ -121,25 +120,63 @@ class ModelManagerViewModel @Inject constructor(
         }
     }
 
-    // FIX: загрузка в application-scope, НЕ viewModelScope.
-    // Большие модели (3-5 ГБ) качаются долго; при уходе с экрана viewModelScope
-    // отменял загрузку → прерывание. Теперь загрузка живёт до конца.
-    // ДОПОЛНИТЕЛЬНО: WakeLock不让屏幕休眠中断下载 (Doze mode прерывает coroutines).
-    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     fun downloadModel(model: OfflineModelInfo) {
+        if (_state.value.downloadingModelId != null) return
+
+        val recommendation = recommendLlmModeUseCase.evaluate(model)
+        if (!recommendation.isSafe) {
+            _state.update {
+                it.copy(
+                    pendingWarning = recommendation.warningMessage,
+                    pendingModelToDownload = model
+                )
+            }
+            return
+        }
+
+        startDownload(model)
+    }
+
+    fun confirmUnsafeDownload() {
+        val model = _state.value.pendingModelToDownload ?: return
+        _state.update {
+            it.copy(
+                pendingWarning = null,
+                pendingModelToDownload = null
+            )
+        }
+        startDownload(model)
+    }
+
+    fun dismissPendingWarning() {
+        _state.update {
+            it.copy(
+                pendingWarning = null,
+                pendingModelToDownload = null
+            )
+        }
+    }
+
+    private fun startDownload(model: OfflineModelInfo) {
         if (_state.value.downloadingModelId != null) return
         downloadJob?.cancel()
         downloadJob = downloadScope.launch {
-            // Partial WakeLock — CPU работает даже при выключенном экране (Doze).
             val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
             val wakeLock = powerManager.newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
                 "BRPAssistant::ModelDownload"
-            ).apply { acquire(30 * 60 * 1000L) } // 30 минут максимум
+            ).apply { acquire(30 * 60 * 1000L) }
 
             try {
-                _state.update { it.copy(downloadingModelId = model.id, error = null, downloadProgress = 0f) }
+                _state.update {
+                    it.copy(
+                        downloadingModelId = model.id,
+                        error = null,
+                        downloadProgress = 0f,
+                        pendingWarning = null,
+                        pendingModelToDownload = null
+                    )
+                }
                 downloader.downloadModel(model).collect { downloadState ->
                     when (downloadState) {
                         is ModelDownloadState.Progress -> {
@@ -162,11 +199,6 @@ class ModelManagerViewModel @Inject constructor(
         }
     }
 
-    /**
-     * FIX #4: выставляем isActivating = true перед initialize() и сбрасываем
-     * после. UI может подписаться на это поле и показать CircularProgressIndicator
-     * или заблокировать кнопку активации на время загрузки модели в память.
-     */
     fun activateModel(model: OfflineModelInfo) {
         if (activateJob?.isActive == true) return
         activateJob = viewModelScope.launch {
@@ -178,9 +210,9 @@ class ModelManagerViewModel @Inject constructor(
             } else {
                 _state.update {
                     it.copy(
-                        isActivating      = false,
+                        isActivating = false,
                         activatingModelId = null,
-                        error             = result.exceptionOrNull()?.message ?: "Ошибка активации"
+                        error = result.exceptionOrNull()?.message ?: "Ошибка активации"
                     )
                 }
             }
