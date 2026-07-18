@@ -5,6 +5,7 @@ import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.data.db.entities.KnowledgeChunk
 import com.brp.assistant.domain.model.ChatMessage
+import javax.inject.Inject
 
 class PromptBuilder @Inject constructor(
     private val systemPromptProvider: SystemPromptProvider
