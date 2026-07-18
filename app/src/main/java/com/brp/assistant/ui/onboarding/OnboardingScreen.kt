@@ -11,13 +11,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/**
+ * Экран онбординга — показывается только при первом запуске.
+ * Сигнатура соответствует вызову в BrpNavGraph.kt:
+ *   OnboardingScreen(totalRamGb, deviceInfo, onFinish)
+ *
+ * @param totalRamGb  Общий объём RAM устройства в ГБ (из DeviceCapabilityProvider).
+ * @param deviceInfo  Строка с кратким описанием устройства (RAM, API, ABI).
+ * @param onFinish    Коллбэк: пользователь завершил онбординг (вызывает completeOnboarding()).
+ */
 @Composable
 fun OnboardingScreen(
+    totalRamGb: Double,
     deviceInfo: String,
-    recommendLocalModel: Boolean,
-    onSelectVehicle: () -> Unit,
     onFinish: () -> Unit
 ) {
+    // >= 4 GB считаем достаточным для локальной LLM
+    val recommendLocalModel = totalRamGb >= 4.0
+
     var step by remember { mutableStateOf(0) }
 
     Surface(
@@ -37,18 +48,12 @@ fun OnboardingScreen(
                     deviceInfo = deviceInfo,
                     recommendLocalModel = recommendLocalModel
                 ) { step = 2 }
-                2 -> OnboardingStep3(
-                    onSelectVehicle = {
-                        onSelectVehicle()
-                        onFinish()
-                    },
-                    onSkip = onFinish
-                )
+                2 -> OnboardingStep3(onFinish = onFinish)
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            // Step indicator
+            // Dot indicator
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -78,25 +83,30 @@ private fun OnboardingStep1(onNext: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
+            text = "🏍️",
+            fontSize = 56.sp
+        )
+        Text(
             text = "BRP Assistant",
-            fontSize = 32.sp,
+            fontSize = 30.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
         )
         Text(
             text = "Ваш AI-помощник по технике BRP",
-            fontSize = 18.sp,
+            fontSize = 17.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-            text = "Диагностика, советы и поддержка — всё в одном приложении. Работает с локальными и онлайн AI-моделями.",
+            text = "Диагностика, советы, регламент — всё в одном приложении.
+Работает с локальными и онлайн AI-моделями.",
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 8.dp)
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Button(
             onClick = onNext,
             modifier = Modifier.fillMaxWidth()
@@ -118,7 +128,7 @@ private fun OnboardingStep2(
     ) {
         Text(
             text = "Ваше устройство",
-            fontSize = 24.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -133,6 +143,7 @@ private fun OnboardingStep2(
                 text = deviceInfo,
                 modifier = Modifier.padding(16.dp),
                 fontSize = 13.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -150,7 +161,7 @@ private fun OnboardingStep2(
                 text = if (recommendLocalModel)
                     "✅ Рекомендуем локальную модель — работает офлайн и бесплатно"
                 else
-                    "☁️ Рекомендуем онлайн-модель (Gemini/Groq) — на вашем устройстве недостаточно памяти для локальной модели",
+                    "☁️ Рекомендуем онлайн-модель (Gemini / Groq) — на вашем устройстве недостаточно памяти для локальной модели",
                 modifier = Modifier.padding(16.dp),
                 fontSize = 14.sp,
                 color = if (recommendLocalModel)
@@ -160,7 +171,7 @@ private fun OnboardingStep2(
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Button(
             onClick = onNext,
             modifier = Modifier.fillMaxWidth()
@@ -171,38 +182,33 @@ private fun OnboardingStep2(
 }
 
 @Composable
-private fun OnboardingStep3(
-    onSelectVehicle: () -> Unit,
-    onSkip: () -> Unit
-) {
+private fun OnboardingStep3(onFinish: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "Выберите технику",
+            text = "🎉",
+            fontSize = 56.sp
+        )
+        Text(
+            text = "Готовы к работе!",
             fontSize = 24.sp,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
-            text = "Укажите вашу модель BRP, чтобы получать точные советы и диагностику.",
+            text = "Выберите свою технику BRP в разделе «Моя техника», чтобы получать точные советы и диагностику.",
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(modifier = Modifier.height(8.dp))
         Button(
-            onClick = onSelectVehicle,
+            onClick = onFinish,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Выбрать технику")
-        }
-        TextButton(
-            onClick = onSkip,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Пропустить, настрою позже")
+            Text("Начать")
         }
     }
 }
