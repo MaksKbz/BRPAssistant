@@ -106,7 +106,7 @@ jobs:
           path: app/schemas/
           retention-days: 7
 
-      - name: Bump version and post summary
+      - name: Post build summary
         run: |
           echo "## ✅ APK собран успешно" >> $GITHUB_STEP_SUMMARY
           echo "- **Версия:** v${{ steps.version.outputs.VERSION_NAME }}" >> $GITHUB_STEP_SUMMARY
