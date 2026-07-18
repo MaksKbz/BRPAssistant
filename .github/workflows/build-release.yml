@@ -28,10 +28,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gradle 8.13
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
 
       - name: Bump patch version
         id: bump
@@ -61,7 +59,9 @@ jobs:
           echo "new_code=$NEW_CODE"    >> $GITHUB_OUTPUT
 
       - name: Build Release APK
-        run: gradle assembleRelease --stacktrace --no-daemon
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --stacktrace --no-daemon
 
       - name: List APK outputs
         run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'

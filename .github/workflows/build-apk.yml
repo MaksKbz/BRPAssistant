@@ -23,10 +23,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gradle 8.13
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -39,7 +37,9 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace --no-daemon
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Find APK
         id: find_apk
@@ -78,7 +78,7 @@ jobs:
       - name: Get version name
         id: version
         run: |
-          VERSION=$(grep -oP 'versionName\s*=\s*"\K[+]+' app/build.gradle.kts || echo "unknown")
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unknown")
           echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
