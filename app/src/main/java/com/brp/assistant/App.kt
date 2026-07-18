@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.brp.assistant.data.rag.KnowledgeChunkInitializer
 import com.brp.assistant.domain.AppHealthChecker
+import com.brp.assistant.domain.CleanupWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,9 +13,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-// FIX #2: App реализует Configuration.Provider для HiltWorkerFactory
-// Это позволяет @HiltWorker-аннотированным Worker-классам (ModelDownloadWorker)
-// получать зависимости через Hilt при создании WorkManager
 @HiltAndroidApp
 class App : Application(), Configuration.Provider {
 
@@ -22,19 +20,12 @@ class App : Application(), Configuration.Provider {
     lateinit var workerFactory: HiltWorkerFactory
 
     /**
-     * #5 / #10 — Health Check инжектируется и запускается при старте.
+     * Health Check запускается при старте:
+     * 1. Свободное место на диске (>= 500 MB)
+     * 2. Доступность БД (пробный SELECT)
+     * 3. Наличие хотя бы одного API-ключа
      *
-     * runChecks() выполняет три проверки асинхронно в IO-диспетчере:
-     *   1. Свободное место на диске (>= 500 MB)
-     *   2. Доступность БД (пробный SELECT)
-     *   3. Наличие хотя бы одного API-ключа
-     *
-     * Результат публикуется в AppHealthChecker.status (StateFlow<HealthStatus>).
-     * Потребители:
-     *   • ChatViewModel — подписывается и показывает предупреждение в UI
-     *   • ChatSessionRepository (#8) — используется как пример safe-репозитория
-     *     (не использует healthChecker напрямую, но следует тому же паттерну
-     *     изоляции ошибок БД через safeQuery { })
+     * Статус публикуется в AppHealthChecker.status (StateFlow<HealthStatus>).
      */
     @Inject
     lateinit var healthChecker: AppHealthChecker
@@ -46,17 +37,19 @@ class App : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        // #10: healthChecker.runChecks() — подключён здесь.
-        // Статус доступен всем подписчикам через healthChecker.status StateFlow.
+
+        // Health check — проверяет диск, БД и API-ключи при старте
         healthChecker.runChecks()
 
-        // При первом запуске (или после миграции на v7) заполняем таблицу
-        // knowledge_chunks из markdown-карточек. Это фоновая операция,
-        // не блокирует старт UI.
+        // Заполняем knowledge_chunks из markdown-карточек (фоновая операция)
         appScope.launch {
             runCatching { chunkInitializer.ensureChunksPopulated() }
                 .onFailure { it.printStackTrace() }
         }
+
+        // Еженедельная очистка: старые сессии + .part-файлы
+        // Запускается только при достаточном заряде батареи
+        CleanupWorker.enqueue(this)
     }
 
     override val workManagerConfiguration: Configuration
