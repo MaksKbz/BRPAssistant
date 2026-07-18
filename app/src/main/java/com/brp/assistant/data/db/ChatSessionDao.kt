@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatSessionDao {
 
-    // ── Сессии ───────────────────────────────────────────────────────────────────────────────
+    // ── Сессии ────────────────────────────────────────────────────────────────────────────────────────
 
     /** Реактивный поток всех сессий — UI обновляется автоматически при любом изменении. */
     @Query("SELECT * FROM chat_sessions ORDER BY updatedAt DESC")
@@ -35,15 +35,21 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions")
     suspend fun deleteAllSessions()
 
-    // ── #6 Поиск и пагинация ──────────────────────────────────────────────────────────────
+    /**
+     * CleanupWorker: удаляет сессии, не обновлявшиеся с определённого момента.
+     * Используется для еженедельной очистки: удаляет сессии старше 90 дней.
+     * ON DELETE CASCADE в chat_messages автоматически удаляет сообщения.
+     * @param cutoffMs Timestamp в миллисекундах: удаляются сессии с updatedAt < cutoffMs.
+     */
+    @Query("DELETE FROM chat_sessions WHERE updatedAt < :cutoffMs")
+    suspend fun deleteSessionsOlderThan(cutoffMs: Long)
+
+    // ── #6 Поиск и пагинация ──────────────────────────────────────────────────
 
     /**
      * #6 — Полнотекстовый поиск по title и vehicleName сессий.
      *
      * LIKE '%query%' достаточно для текущего объёма данных (сотни сессий).
-     * При росте до тысяч записей стоит добавить FTS4/FTS5 виртуальную таблицу.
-     *
-     * Результат отсортирован по updatedAt DESC — последние изменённые сверху.
      */
     @Query(
         "SELECT * FROM chat_sessions " +
@@ -56,16 +62,8 @@ interface ChatSessionDao {
     /**
      * #6 — Курсорная пагинация сессий по updatedAt DESC.
      *
-     * @param limit  Размер страницы (рекомендуется 20–50).
+     * @param limit  Размер страницы (20–50).
      * @param offset Смещение (страница × limit).
-     *
-     * Использование:
-     *   page 0 → offset = 0
-     *   page 1 → offset = limit
-     *   page N → offset = N * limit
-     *
-     * В следующем PR будет обёрнут в PagingSource (Paging 3), если
-     * число сессий превысит 200 (эмпирический порог для LazyColumn).
      */
     @Query(
         "SELECT * FROM chat_sessions " +
@@ -74,7 +72,7 @@ interface ChatSessionDao {
     )
     suspend fun getSessionsPaged(limit: Int, offset: Int): List<ChatSessionEntity>
 
-    // ── Сообщения ───────────────────────────────────────────────────────────
+    // ── Сообщения ─────────────────────────────────────────────────────────────────────
 
     /** Все сообщения сессии в хронологическом порядке. */
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
@@ -82,7 +80,7 @@ interface ChatSessionDao {
 
     /**
      * Bulk-insert с REPLACE — идемпотенен при повторных вызовах.
-     * Оставлен для обратной совместимости и полной перезаписи в легаси-сценариях.
+     * Оставлен для обратной совместимости.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)
@@ -91,11 +89,7 @@ interface ChatSessionDao {
      * FIX #3: дельта-сохранение одного сообщения с IGNORE.
      *
      * Используется в ChatViewModel.persistMessages() для сохранения двух новых
-     * сообщений (вопрос + ответ) вместо перезаписи всей сессии.
-     *
-     * IGNORE: если сообщение уже есть в БД (по id) — пропускаем. Такое поведение
-     * правильно для сообщений с единственным UUID: повторная запись — это
-     * одно и то же сообщение, а не обновлённое.
+     * сообщений (вопрос + ответ). IGNORE: если id уже есть — пропускаем.
      */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertMessage(message: ChatMessageEntity)
