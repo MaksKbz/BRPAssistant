@@ -57,6 +57,8 @@ sealed class Screen(val route: String, val label: String) {
     data object Diagnose      : Screen("diagnose",  "Диагностика")
     data object AccessoryShop : Screen("accessory", "Аксессуары")
     data object Compare       : Screen("compare",   "Сравнение")
+    /** Заготовка: первый запуск. Маршрут есть, экран будет добавлен в отдельном PR. */
+    data object Onboarding    : Screen("onboarding", "Приветствие")
 }
 
 private val bottomScreens = listOf(
@@ -64,18 +66,20 @@ private val bottomScreens = listOf(
 )
 
 /**
- * Безопасная навигация: для Home — popBackStack к существующему экрану
- * (избегает дублирования Home в стеке), для остальных — navigate с launchSingleTop.
- * Раньше navigate("home") создавал НОВЫЙ Home поверх текущего → кнопка «Домой»
- * не работала (визуально ничего не менялось или рос стек).
+ * Безопасная навигация:
+ * • Home — popBackStack избегает дубликатов
+ * • все остальные — launchSingleTop=true + restoreState=true
  */
-private fun navigateSafe(navController: androidx.navigation.NavHostController, route: String) {
+private fun navigateSafe(
+    navController: androidx.navigation.NavHostController,
+    route: String
+) {
     if (route == Screen.Home.route) {
         navController.popBackStack(Screen.Home.route, inclusive = false)
     } else {
         navController.navigate(route) {
             launchSingleTop = true
-            restoreState = true
+            restoreState    = true
         }
     }
 }
@@ -93,7 +97,7 @@ private val navItems = listOf(
 )
 
 /**
- * A1 — WeakReference чтобы избежать утечки памяти ChatViewModel в ExpandedLayout.
+ * WeakReference чтобы избежать утечки ChatViewModel в ExpandedLayout.
  */
 object SharedChatVmHolder {
     private var ref: WeakReference<ChatViewModel>? = null
@@ -272,9 +276,7 @@ private fun ExpandedLayout(
                     icon     = item.iconContent,
                     label    = { Text(item.screen.label) },
                     selected = selected,
-                    onClick  = {
-                        navigateSafe(navController, item.screen.route)
-                    },
+                    onClick  = { navigateSafe(navController, item.screen.route) },
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
             }
@@ -382,7 +384,7 @@ private fun ExpandedLayout(
                         if (q.isEmpty()) sessions
                         else sessions.filter {
                             it.title.lowercase().contains(q) ||
-                            it.vehicleName?.lowercase()?.contains(q) == true
+                                    it.vehicleName?.lowercase()?.contains(q) == true
                         }
                     }
 
@@ -445,7 +447,9 @@ private fun ExpandedLayout(
             currentTheme        = currentTheme,
             healthWarning       = healthWarning,
             widthSizeClass      = WindowWidthSizeClass.Medium,
-            modifier            = Modifier.weight(1f).fillMaxHeight()
+            modifier            = Modifier
+                .weight(1f)
+                .fillMaxHeight()
         )
     }
 }
@@ -475,9 +479,7 @@ private fun BrpNavigationRail(
                 icon     = item.iconContent,
                 label    = { Text(item.screen.label) },
                 selected = selected,
-                onClick  = {
-                    navigateSafe(navController, item.screen.route)
-                }
+                onClick  = { navigateSafe(navController, item.screen.route) }
             )
         }
         Spacer(Modifier.weight(1f))
@@ -507,15 +509,15 @@ private fun NavHostContent(
             HomeScreen(
                 healthWarning           = healthWarning,
                 onNavigateToChat        = { mode -> navController.navigate(Screen.Chat.createRoute(mode)) },
-                onNavigateToDiagnose    = { navController.navigate(Screen.Diagnose.route) },
-                onNavigateToCompare     = { navController.navigate(Screen.Compare.route) },
-                onNavigateToMaintenance = { navController.navigate(Screen.Maintenance.route) },
-                onNavigateToAccessory   = { navController.navigate(Screen.AccessoryShop.route) },
-                onNavigateToSituations  = { navController.navigate(Screen.Situations.route) },
-                onNavigateToVehicle     = { navController.navigate(Screen.VehicleSelect.route) },
-                onNavigateToModel       = { navController.navigate(Screen.ModelManager.route) },
-                onNavigateToUserDocs    = { navController.navigate(Screen.UserDocs.route) },
-                onNavigateToSettings    = { navController.navigate(Screen.ModelManager.route) }
+                onNavigateToDiagnose    = { navigateSafe(navController, Screen.Diagnose.route) },
+                onNavigateToCompare     = { navigateSafe(navController, Screen.Compare.route) },
+                onNavigateToMaintenance = { navigateSafe(navController, Screen.Maintenance.route) },
+                onNavigateToAccessory   = { navigateSafe(navController, Screen.AccessoryShop.route) },
+                onNavigateToSituations  = { navigateSafe(navController, Screen.Situations.route) },
+                onNavigateToVehicle     = { navigateSafe(navController, Screen.VehicleSelect.route) },
+                onNavigateToModel       = { navigateSafe(navController, Screen.ModelManager.route) },
+                onNavigateToUserDocs    = { navigateSafe(navController, Screen.UserDocs.route) },
+                onNavigateToSettings    = { navigateSafe(navController, Screen.ModelManager.route) }
             )
         }
         composable(Screen.Situations.route) {
@@ -660,8 +662,8 @@ private fun NavHostContent(
                     "Рвётся ремень (Ski-Doo/Lynx)", "Проблемы с DCT (Maverick R)"
                 ),
                 onSend           = { text -> navController.navigate(Screen.Chat.createRoute("diagnosis", text)) },
-                onSelectVehicle  = { navController.navigate(Screen.VehicleSelect.route) },
-                onGoToSituations = { navController.navigate(Screen.Situations.route) },
+                onSelectVehicle  = { navigateSafe(navController, Screen.VehicleSelect.route) },
+                onGoToSituations = { navigateSafe(navController, Screen.Situations.route) },
                 onNavigate       = { route -> navigateSafe(navController, route) },
                 onBack           = { navController.popBackStack() }
             )
@@ -681,7 +683,7 @@ private fun NavHostContent(
                 onCategorySelect     = { cat ->
                     navController.navigate(Screen.Chat.createRoute("accessory", "Хочу аксессуары из категории $cat"))
                 },
-                onSelectVehicle      = { navController.navigate(Screen.VehicleSelect.route) },
+                onSelectVehicle      = { navigateSafe(navController, Screen.VehicleSelect.route) },
                 onNavigate           = { route -> navigateSafe(navController, route) },
                 onBack               = { navController.popBackStack() }
             )
@@ -711,5 +713,7 @@ private fun NavHostContent(
                 onBack = { navController.popBackStack() }
             )
         }
+        // Screen.Onboarding: маршрут зарегистрирован, экран будет добавлен в отдельном PR
+        // composable(Screen.Onboarding.route) { ... }
     }
 }
