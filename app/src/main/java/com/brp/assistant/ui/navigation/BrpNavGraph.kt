@@ -692,20 +692,22 @@ private fun NavHostContent(
             val modelVm: ModelManagerViewModel = hiltViewModel()
             val state by modelVm.state.collectAsStateWithLifecycle()
             ModelManagerScreen(
-                state                = state,
-                onDownload           = { modelVm.downloadModel(it) },
-                onActivate           = { modelVm.activateModel(it) },
-                onDelete             = { modelVm.deleteModel(it) },
-                onAddFromFile        = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
-                onAddFromUrl         = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
-                onUpdateApiKey       = { modelVm.updateApiKey(it) },
-                onUpdateProvider     = { modelVm.updateAiProvider(it) },
-                onUpdateModel        = { modelVm.updateAiModel(it) },
-                onUpdateSystemPrompt = { modelVm.updateSystemPrompt(it) },
-                onUpdateTemperature  = { modelVm.updateTemperature(it) },
-                onClearError         = { modelVm.clearError() },
-                onNavigate           = { route -> navigateSafe(navController, route) },
-                onBack               = { navController.popBackStack() }
+                state                   = state,
+                onDownload              = { modelVm.downloadModel(it) },
+                onActivate              = { modelVm.activateModel(it) },
+                onDelete                = { modelVm.deleteModel(it) },
+                onAddFromFile           = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
+                onAddFromUrl            = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
+                onUpdateApiKey          = { modelVm.updateApiKey(it) },
+                onUpdateProvider        = { modelVm.updateAiProvider(it) },
+                onUpdateModel           = { modelVm.updateAiModel(it) },
+                onUpdateSystemPrompt    = { modelVm.updateSystemPrompt(it) },
+                onUpdateTemperature     = { modelVm.updateTemperature(it) },
+                onConfirmUnsafeDownload = { modelVm.confirmUnsafeDownload() },
+                onDismissPendingWarning = { modelVm.dismissPendingWarning() },
+                onClearError            = { modelVm.clearError() },
+                onNavigate              = { route -> navigateSafe(navController, route) },
+                onBack                  = { navController.popBackStack() }
             )
         }
         composable(Screen.UserDocs.route) {
