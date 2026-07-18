@@ -8,6 +8,7 @@ import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.ModelRepository
 import com.brp.assistant.domain.AppHealthChecker
+import com.brp.assistant.domain.DeviceCapabilityProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +21,8 @@ class MainViewModel @Inject constructor(
     private val modelRepository: ModelRepository,
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository,
-    private val healthChecker: AppHealthChecker
+    private val healthChecker: AppHealthChecker,
+    private val deviceCapabilityProvider: DeviceCapabilityProvider
 ) : ViewModel() {
 
     private val _selectedVehicleId   = MutableStateFlow<String?>(null)
@@ -44,15 +46,27 @@ class MainViewModel @Inject constructor(
     private val _healthWarning       = MutableStateFlow<String?>(null)
     val healthWarning: StateFlow<String?> = _healthWarning.asStateFlow()
 
+    /** null = ещё не знаем (читаем из DataStore), true/false — фактическое значение */
+    private val _onboardingCompleted = MutableStateFlow<Boolean?>(null)
+    val onboardingCompleted: StateFlow<Boolean?> = _onboardingCompleted.asStateFlow()
+
+    /** Информация об устройстве для OnboardingScreen */
+    val deviceInfo: String by lazy { deviceCapabilityProvider.formatDeviceInfo() }
+    val totalRamGb: Double by lazy {
+        deviceCapabilityProvider.checkMemory().totalRamMb / 1024.0
+    }
+
     init {
         viewModelScope.launch {
             settingsRepository.appTheme.collect { theme ->
                 _appTheme.value = theme
             }
         }
-
-        // FIX: восстанавливаем selectedVehicleName мгновенно из DataStore,
-        // затем проверяем и обновляем по id.
+        viewModelScope.launch {
+            settingsRepository.onboardingCompleted.collect { completed ->
+                _onboardingCompleted.value = completed
+            }
+        }
         viewModelScope.launch {
             settingsRepository.selectedVehicleName.collect { savedName ->
                 if (_selectedVehicleName.value == null) {
@@ -66,7 +80,6 @@ class MainViewModel @Inject constructor(
                 if (id != null) {
                     val model = modelRepository.getById(id)
                     _selectedVehicle.value = model
-                    // Имя из БД — каноничный источник правды
                     val name = model?.let { "${it.brand.uppercase()} ${it.modelName}" }
                     _selectedVehicleName.value = name
                 } else {
@@ -98,7 +111,6 @@ class MainViewModel @Inject constructor(
     fun selectVehicle(model: BrpModel) {
         viewModelScope.launch {
             val name = "${model.brand.uppercase()} ${model.modelName}"
-            // Сохраняем id и name атомарно— при холодном старте имя восстанавливается мгновенно
             settingsRepository.setSelectedVehicleId(model.id)
             settingsRepository.setSelectedVehicleName(name)
             _selectedVehicle.value = model
@@ -116,6 +128,14 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error loading vehicle by id=$id", e)
             }
+        }
+    }
+
+    /** Вызывается после прохождения всех шагов OnboardingScreen. */
+    fun completeOnboarding() {
+        viewModelScope.launch {
+            settingsRepository.setOnboardingCompleted()
+            _onboardingCompleted.value = true
         }
     }
 
