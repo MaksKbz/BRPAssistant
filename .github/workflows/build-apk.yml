@@ -23,10 +23,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gradle 8.13
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -38,8 +36,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace --no-daemon
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Find APK
         id: find_apk
@@ -105,7 +106,7 @@ jobs:
           path: app/schemas/
           retention-days: 7
 
-      - name: Post build summary
+      - name: Bump version and post summary
         run: |
           echo "## ✅ APK собран успешно" >> $GITHUB_STEP_SUMMARY
           echo "- **Версия:** v${{ steps.version.outputs.VERSION_NAME }}" >> $GITHUB_STEP_SUMMARY
