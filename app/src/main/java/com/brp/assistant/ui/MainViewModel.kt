@@ -20,36 +20,28 @@ class MainViewModel @Inject constructor(
     private val modelRepository: ModelRepository,
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: com.brp.assistant.data.repository.SettingsRepository,
-    /**
-     * B2 — AppHealthChecker подключён к MainViewModel чтобы healthWarning
-     * был доступен на HomeScreen и в BrpNavGraph, а не только в ChatScreen.
-     */
     private val healthChecker: AppHealthChecker
 ) : ViewModel() {
 
-    private val _selectedVehicleId = MutableStateFlow<String?>(null)
+    private val _selectedVehicleId   = MutableStateFlow<String?>(null)
     val selectedVehicleId: StateFlow<String?> = _selectedVehicleId.asStateFlow()
 
     private val _selectedVehicleName = MutableStateFlow<String?>(null)
     val selectedVehicleName: StateFlow<String?> = _selectedVehicleName.asStateFlow()
 
-    private val _selectedVehicle = MutableStateFlow<BrpModel?>(null)
+    private val _selectedVehicle     = MutableStateFlow<BrpModel?>(null)
     val selectedVehicle: StateFlow<BrpModel?> = _selectedVehicle.asStateFlow()
 
-    private val _activeModelId = MutableStateFlow<String?>(null)
+    private val _activeModelId       = MutableStateFlow<String?>(null)
     val activeModelId: StateFlow<String?> = _activeModelId.asStateFlow()
 
-    private val _activeModelName = MutableStateFlow<String?>(null)
+    private val _activeModelName     = MutableStateFlow<String?>(null)
     val activeModelName: StateFlow<String?> = _activeModelName.asStateFlow()
 
-    private val _appTheme = MutableStateFlow("System")
+    private val _appTheme            = MutableStateFlow("System")
     val appTheme: StateFlow<String> = _appTheme.asStateFlow()
 
-    /**
-     * B2 — healthWarning: null = всё хорошо, строка = текст предупреждения.
-     * HomeScreen и любой другой экран может подписаться через collectAsStateWithLifecycle().
-     */
-    private val _healthWarning = MutableStateFlow<String?>(null)
+    private val _healthWarning       = MutableStateFlow<String?>(null)
     val healthWarning: StateFlow<String?> = _healthWarning.asStateFlow()
 
     init {
@@ -58,14 +50,26 @@ class MainViewModel @Inject constructor(
                 _appTheme.value = theme
             }
         }
+
+        // FIX: восстанавливаем selectedVehicleName мгновенно из DataStore,
+        // затем проверяем и обновляем по id.
+        viewModelScope.launch {
+            settingsRepository.selectedVehicleName.collect { savedName ->
+                if (_selectedVehicleName.value == null) {
+                    _selectedVehicleName.value = savedName
+                }
+            }
+        }
         viewModelScope.launch {
             settingsRepository.selectedVehicleId.collect { id ->
                 _selectedVehicleId.value = id
-                id?.let {
-                    val model = modelRepository.getById(it)
+                if (id != null) {
+                    val model = modelRepository.getById(id)
                     _selectedVehicle.value = model
-                    _selectedVehicleName.value = model?.let { "${it.brand.uppercase()} ${it.modelName}" }
-                } ?: run {
+                    // Имя из БД — каноничный источник правды
+                    val name = model?.let { "${it.brand.uppercase()} ${it.modelName}" }
+                    _selectedVehicleName.value = name
+                } else {
                     _selectedVehicle.value = null
                     _selectedVehicleName.value = null
                 }
@@ -80,12 +84,11 @@ class MainViewModel @Inject constructor(
                 }
             }
         }
-        // B2 — подписка на AppHealthChecker.status
         viewModelScope.launch {
             healthChecker.status.collect { status ->
                 _healthWarning.value = when {
                     status.isLowDisk -> "⚠️ Мало места на диске. Освободите память для стабильной работы."
-                    status.isDbError -> "❌ Ошибка БД. Перезапустите приложение."
+                    status.isDbError -> "❌ Ошибка БД. Перезагрузите приложение."
                     else             -> null
                 }
             }
@@ -94,13 +97,20 @@ class MainViewModel @Inject constructor(
 
     fun selectVehicle(model: BrpModel) {
         viewModelScope.launch {
+            val name = "${model.brand.uppercase()} ${model.modelName}"
+            // Сохраняем id и name атомарно— при холодном старте имя восстанавливается мгновенно
             settingsRepository.setSelectedVehicleId(model.id)
+            settingsRepository.setSelectedVehicleName(name)
+            _selectedVehicle.value = model
+            _selectedVehicleName.value = name
         }
     }
 
     fun selectVehicle(id: String, name: String) {
         viewModelScope.launch {
             settingsRepository.setSelectedVehicleId(id)
+            settingsRepository.setSelectedVehicleName(name)
+            _selectedVehicleName.value = name
             try {
                 _selectedVehicle.value = modelRepository.getById(id)
             } catch (e: Exception) {

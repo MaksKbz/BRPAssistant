@@ -24,43 +24,33 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 /**
  * Хранилище настроек приложения.
  *
- * Хранение API-ключей:
- *   В EncryptedSharedPreferences (AES256-SIV ключи + AES256-GCM значения).
- *   Мастер-ключ хранится в Android Keystore System —
- *   недоступен через adb даже на рутованных устройствах.
- *
- * Остальные настройки (неконфиденциальные) хранятся в DataStore.
+ * API-ключи — EncryptedSharedPreferences (AES256-SIV/GCM).
+ * Остальные настройки — DataStore.
  */
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    // ── DataStore keys (неконфиденциальные настройки) ─────────────────────────
-    private val ACTIVE_MODEL_ID     = stringPreferencesKey("active_model_id")
-    private val SELECTED_VEHICLE_ID = stringPreferencesKey("selected_vehicle_id")
-    private val CUSTOM_MODELS_JSON  = stringPreferencesKey("custom_models_json")
-    private val AI_PROVIDER         = stringPreferencesKey("ai_provider")
-    private val AI_MODEL_NAME       = stringPreferencesKey("ai_model_name")
-    private val AI_SYSTEM_PROMPT    = stringPreferencesKey("ai_system_prompt")
-    private val AI_TEMPERATURE      = floatPreferencesKey("ai_temperature")
-    private val PURCHASE_DATE       = longPreferencesKey("purchase_date")
-    private val APP_THEME           = stringPreferencesKey("app_theme")
-    // Глобальный выбор модели чата: null=по умолчанию (локальная если готова),
-    // "Gemini"/"Groq" = онлайн. Применяется ко ВСЕМ чатам.
-    private val CHAT_FORCE_ONLINE   = stringPreferencesKey("chat_force_online")
+    // ── DataStore keys ─────────────────────────────────────────────────────────────────────────
+    private val ACTIVE_MODEL_ID       = stringPreferencesKey("active_model_id")
+    private val SELECTED_VEHICLE_ID   = stringPreferencesKey("selected_vehicle_id")
+    private val SELECTED_VEHICLE_NAME = stringPreferencesKey("selected_vehicle_name")
+    private val CUSTOM_MODELS_JSON    = stringPreferencesKey("custom_models_json")
+    private val AI_PROVIDER           = stringPreferencesKey("ai_provider")
+    private val AI_MODEL_NAME         = stringPreferencesKey("ai_model_name")
+    private val AI_SYSTEM_PROMPT      = stringPreferencesKey("ai_system_prompt")
+    private val AI_TEMPERATURE        = floatPreferencesKey("ai_temperature")
+    private val PURCHASE_DATE         = longPreferencesKey("purchase_date")
+    private val APP_THEME             = stringPreferencesKey("app_theme")
+    private val CHAT_FORCE_ONLINE     = stringPreferencesKey("chat_force_online")
+    private val ONBOARDING_COMPLETED  = stringPreferencesKey("onboarding_completed")
 
-    // ── EncryptedSharedPreferences (только для API-ключей) ─────────────────
+    // ── EncryptedSharedPreferences ──────────────────────────────────────────────
     private companion object {
         const val ENC_PREFS_FILE = "brp_secure_prefs"
         const val KEY_GEMINI    = "gemini_api_key"
-
-        // ⚠️ ВАЖНО: значение "grok_api_key" — намеренная опечатка (groq → grok).
-        // НЕ ИСПРАВЛЯТЬ! Ключ уже записан с этим именем в EncryptedSharedPreferences
-        // у всех существующих пользователей. Переименование удалит все сохранённые
-        // API-ключи Groq. Публичное имя свойства (groqApiKey) исправлено,
-        // внутренний ключ хранилища заморожен навсегда.
+        // ⚠️ "grok_api_key" — намеренная опечатка. НЕ ИСПРАВЛЯТЬ!
         const val KEY_GROQ      = "grok_api_key"
-
         const val TAG           = "SettingsRepo"
     }
 
@@ -77,14 +67,11 @@ class SettingsRepository @Inject constructor(
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to init EncryptedSharedPreferences, falling back to null", e)
+            Log.e(TAG, "Failed to init EncryptedSharedPreferences", e)
             null
         }
     }
 
-    // ── API ключи — читаются в MutableStateFlow при инициализации ────────────────
-    // Примечание: EncryptedSharedPreferences не поддерживает Flow,
-    // поэтому обертываем значения в MutableStateFlow вручную.
     private val _geminiApiKey = MutableStateFlow(readEncrypted(KEY_GEMINI))
     val geminiApiKey: Flow<String?> = _geminiApiKey.asStateFlow()
 
@@ -93,30 +80,38 @@ class SettingsRepository @Inject constructor(
 
     private fun readEncrypted(key: String): String? = encryptedPrefs?.getString(key, null)
 
-    // ── DataStore flows ────────────────────────────────────────────────────────────────
-    val activeModelId: Flow<String?> = context.dataStore.data.map { it[ACTIVE_MODEL_ID] }
-    val selectedVehicleId: Flow<String?> = context.dataStore.data.map { it[SELECTED_VEHICLE_ID] }
-    val customModelsJson: Flow<String?> = context.dataStore.data.map { it[CUSTOM_MODELS_JSON] }
-    val aiProvider: Flow<String?> = context.dataStore.data.map { it[AI_PROVIDER] ?: "Gemini" }
-    val aiModelName: Flow<String?> = context.dataStore.data.map { it[AI_MODEL_NAME] ?: "gemini-1.5-flash" }
-    val aiSystemPrompt: Flow<String> = context.dataStore.data.map {
-        it[AI_SYSTEM_PROMPT] ?: "Ты — экспертный ассистент BRP. Отвечай кратко и профессионально."
-    }
-    val aiTemperature: Flow<Float> = context.dataStore.data.map { it[AI_TEMPERATURE] ?: 0.7f }
+    // ── DataStore flows ─────────────────────────────────────────────────────────────────────
+    val activeModelId: Flow<String?> =
+        context.dataStore.data.map { it[ACTIVE_MODEL_ID] }
+    val selectedVehicleId: Flow<String?> =
+        context.dataStore.data.map { it[SELECTED_VEHICLE_ID] }
 
-    // Глобальный выбор модели чата: null=по умолчанию, "Gemini"/"Groq"=онлайн
-    val chatForceOnline: Flow<String?> = context.dataStore.data.map { it[CHAT_FORCE_ONLINE] }
+    /** Денормализованное имя техники — восстанавливается мгновенно при холодном старте. */
+    val selectedVehicleName: Flow<String?> =
+        context.dataStore.data.map { it[SELECTED_VEHICLE_NAME] }
 
-    suspend fun setChatForceOnline(provider: String?) {
-        context.dataStore.edit { prefs ->
-            if (provider == null) prefs.remove(CHAT_FORCE_ONLINE)
-            else prefs[CHAT_FORCE_ONLINE] = provider
-        }
-    }
-    val purchaseDate: Flow<Long?> = context.dataStore.data.map { it[PURCHASE_DATE] }
-    val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "System" }
+    val customModelsJson: Flow<String?> =
+        context.dataStore.data.map { it[CUSTOM_MODELS_JSON] }
+    val aiProvider: Flow<String?> =
+        context.dataStore.data.map { it[AI_PROVIDER] ?: "Gemini" }
+    val aiModelName: Flow<String?> =
+        context.dataStore.data.map { it[AI_MODEL_NAME] ?: "gemini-1.5-flash" }
+    val aiSystemPrompt: Flow<String> =
+        context.dataStore.data.map { it[AI_SYSTEM_PROMPT] ?: "Ты — экспертный ассистент BRP. Отвечай кратко и профессионально." }
+    val aiTemperature: Flow<Float> =
+        context.dataStore.data.map { it[AI_TEMPERATURE] ?: 0.7f }
+    val chatForceOnline: Flow<String?> =
+        context.dataStore.data.map { it[CHAT_FORCE_ONLINE] }
+    val purchaseDate: Flow<Long?> =
+        context.dataStore.data.map { it[PURCHASE_DATE] }
+    val appTheme: Flow<String> =
+        context.dataStore.data.map { it[APP_THEME] ?: "System" }
 
-    // ── API ключи — запись в EncryptedSharedPreferences + обновление StateFlow ────────
+    /** true — онбординг уже показывался, false — первый запуск. */
+    val onboardingCompleted: Flow<Boolean> =
+        context.dataStore.data.map { it[ONBOARDING_COMPLETED] == "true" }
+
+    // ── API-ключи ──────────────────────────────────────────────────────────────────
     suspend fun setGeminiApiKey(key: String?) = withContext(Dispatchers.IO) {
         writeEncrypted(KEY_GEMINI, key)
         _geminiApiKey.value = key
@@ -135,48 +130,54 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    // ── DataStore setters ───────────────────────────────────────────────────────────────
+    // ── DataStore setters ────────────────────────────────────────────────────────────
     suspend fun setAiProvider(provider: String) {
         context.dataStore.edit { it[AI_PROVIDER] = provider }
     }
-
     suspend fun setAiModelName(model: String) {
         context.dataStore.edit { it[AI_MODEL_NAME] = model }
     }
-
     suspend fun setAiSystemPrompt(prompt: String) {
         context.dataStore.edit { it[AI_SYSTEM_PROMPT] = prompt }
     }
-
     suspend fun setAiTemperature(temp: Float) {
         context.dataStore.edit { it[AI_TEMPERATURE] = temp }
     }
-
     suspend fun setCustomModelsJson(json: String?) {
         context.dataStore.edit {
             if (json != null) it[CUSTOM_MODELS_JSON] = json else it.remove(CUSTOM_MODELS_JSON)
         }
     }
-
     suspend fun setActiveModelId(id: String?) {
         context.dataStore.edit {
             if (id != null) it[ACTIVE_MODEL_ID] = id else it.remove(ACTIVE_MODEL_ID)
         }
     }
-
     suspend fun setSelectedVehicleId(id: String?) {
         context.dataStore.edit {
             if (id != null) it[SELECTED_VEHICLE_ID] = id else it.remove(SELECTED_VEHICLE_ID)
         }
     }
-
+    suspend fun setSelectedVehicleName(name: String?) {
+        context.dataStore.edit {
+            if (name != null) it[SELECTED_VEHICLE_NAME] = name else it.remove(SELECTED_VEHICLE_NAME)
+        }
+    }
+    suspend fun setOnboardingCompleted() {
+        context.dataStore.edit { it[ONBOARDING_COMPLETED] = "true" }
+    }
     suspend fun setPurchaseDate(date: Long?) {
         context.dataStore.edit {
             if (date != null) it[PURCHASE_DATE] = date else it.remove(PURCHASE_DATE)
         }
     }
-
     suspend fun setAppTheme(theme: String) {
         context.dataStore.edit { it[APP_THEME] = theme }
+    }
+    suspend fun setChatForceOnline(provider: String?) {
+        context.dataStore.edit {
+            if (provider == null) it.remove(CHAT_FORCE_ONLINE)
+            else it[CHAT_FORCE_ONLINE] = provider
+        }
     }
 }
