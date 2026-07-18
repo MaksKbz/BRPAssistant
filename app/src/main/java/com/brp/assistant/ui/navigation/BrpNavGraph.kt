@@ -33,7 +33,6 @@ import com.brp.assistant.ui.docs.UserDocsScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
 import com.brp.assistant.ui.model.ModelManagerViewModel
-import com.brp.assistant.ui.onboarding.OnboardingScreen
 import com.brp.assistant.ui.situations.SituationsScreen
 import com.brp.assistant.ui.situations.SituationsViewModel
 import com.brp.assistant.ui.maintenance.MaintenanceScreen
@@ -58,6 +57,7 @@ sealed class Screen(val route: String, val label: String) {
     data object Diagnose      : Screen("diagnose",  "Диагностика")
     data object AccessoryShop : Screen("accessory", "Аксессуары")
     data object Compare       : Screen("compare",   "Сравнение")
+    /** Заготовка: первый запуск. Маршрут есть, экран будет добавлен в отдельном PR. */
     data object Onboarding    : Screen("onboarding", "Приветствие")
 }
 
@@ -65,6 +65,11 @@ private val bottomScreens = listOf(
     Screen.Home, Screen.Diagnose, Screen.AccessoryShop, Screen.VehicleSelect
 )
 
+/**
+ * Безопасная навигация:
+ * • Home — popBackStack избегает дубликатов
+ * • все остальные — launchSingleTop=true + restoreState=true
+ */
 private fun navigateSafe(
     navController: androidx.navigation.NavHostController,
     route: String
@@ -91,8 +96,12 @@ private val navItems = listOf(
     NavItem(screen = Screen.VehicleSelect) { Icon(Icons.Default.DirectionsCar, contentDescription = Screen.VehicleSelect.label) }
 )
 
+/**
+ * WeakReference чтобы избежать утечки ChatViewModel в ExpandedLayout.
+ */
 object SharedChatVmHolder {
     private var ref: WeakReference<ChatViewModel>? = null
+
     var chatVm: ChatViewModel?
         get()      = ref?.get()
         set(value) { ref = value?.let { WeakReference(it) } }
@@ -107,9 +116,6 @@ fun BrpNavGraph(
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute      = navBackStackEntry?.destination?.route
-
-    // null = ещё читаем из DataStore — не рендерим ничего до готовности
-    val onboardingCompleted by mainViewModel.onboardingCompleted.collectAsStateWithLifecycle()
 
     val showNav = currentRoute in bottomScreens.map { it.route } ||
             currentRoute?.startsWith("chat/") == true ||
@@ -131,20 +137,6 @@ fun BrpNavGraph(
         configuration.screenWidthDp >= 480              -> WindowWidthSizeClass.Medium
         else                                             -> WindowWidthSizeClass.Compact
     }
-
-    // Пока читаем флаг из DataStore — показываем splash
-    if (onboardingCompleted == null) {
-        Box(
-            modifier            = Modifier.fillMaxSize(),
-            contentAlignment    = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    // Стартовый экран: onboarding для новых, home для остальных
-    val startDest = if (onboardingCompleted == true) Screen.Home.route else Screen.Onboarding.route
 
     when {
         effectiveSizeClass == WindowWidthSizeClass.Expanded && showNav -> {
@@ -180,7 +172,6 @@ fun BrpNavGraph(
                     currentTheme        = currentTheme,
                     healthWarning       = healthWarning,
                     widthSizeClass      = effectiveSizeClass,
-                    startDestination    = startDest,
                     modifier            = Modifier
                         .weight(1f)
                         .fillMaxHeight()
@@ -200,7 +191,9 @@ fun BrpNavGraph(
                                     icon     = item.iconContent,
                                     label    = { Text(item.screen.label) },
                                     selected = selected,
-                                    onClick  = { navigateSafe(navController, item.screen.route) }
+                                    onClick  = {
+                                        navigateSafe(navController, item.screen.route)
+                                    }
                                 )
                             }
                         }
@@ -217,7 +210,6 @@ fun BrpNavGraph(
                     currentTheme        = currentTheme,
                     healthWarning       = healthWarning,
                     widthSizeClass      = effectiveSizeClass,
-                    startDestination    = startDest,
                     modifier            = Modifier.padding(innerPadding)
                 )
             }
@@ -242,8 +234,6 @@ private fun ExpandedLayout(
     val vm = SharedChatVmHolder.chatVm
     val chatState = vm?.state?.collectAsStateWithLifecycle()
     val healthWarning by mainViewModel.healthWarning.collectAsStateWithLifecycle()
-    val onboardingCompleted by mainViewModel.onboardingCompleted.collectAsStateWithLifecycle()
-    val startDest = if (onboardingCompleted == true) Screen.Home.route else Screen.Onboarding.route
 
     var panelSearch by remember { mutableStateOf("") }
 
@@ -292,27 +282,48 @@ private fun ExpandedLayout(
             }
 
             Spacer(Modifier.weight(1f))
+
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Column(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (!selectedVehicleName.isNullOrBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.DirectionsCar, contentDescription = null,
-                            modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.DirectionsCar,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(Modifier.width(4.dp))
-                        Text(text = selectedVehicleName, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text     = selectedVehicleName,
+                            style    = MaterialTheme.typography.labelSmall,
+                            color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 if (!activeModelName.isNullOrBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Memory, contentDescription = null,
-                            modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.Memory,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(Modifier.width(4.dp))
-                        Text(text = activeModelName, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text     = activeModelName,
+                            style    = MaterialTheme.typography.labelSmall,
+                            color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -320,10 +331,16 @@ private fun ExpandedLayout(
 
         if (isChatRoute && chatState != null) {
             Surface(
-                modifier = Modifier.width(280.dp).fillMaxHeight(),
+                modifier       = Modifier
+                    .width(280.dp)
+                    .fillMaxHeight(),
                 tonalElevation = 1.dp
             ) {
-                Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp)
+                ) {
                     OutlinedButton(
                         onClick  = { vm?.startNewChat(selectedVehicleId, selectedVehicleName, "both") },
                         modifier = Modifier.fillMaxWidth()
@@ -332,9 +349,12 @@ private fun ExpandedLayout(
                         Spacer(Modifier.width(4.dp))
                         Text("Новый чат")
                     }
+
                     Spacer(Modifier.height(8.dp))
+
                     OutlinedTextField(
-                        value = panelSearch, onValueChange = { panelSearch = it },
+                        value         = panelSearch,
+                        onValueChange = { panelSearch = it },
                         placeholder   = { Text("Поиск", style = MaterialTheme.typography.bodySmall) },
                         leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         trailingIcon  = if (panelSearch.isNotEmpty()) {{
@@ -342,13 +362,22 @@ private fun ExpandedLayout(
                                 Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(16.dp))
                             }
                         }} else null,
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        textStyle  = MaterialTheme.typography.bodySmall
+                        singleLine    = true,
+                        modifier      = Modifier.fillMaxWidth(),
+                        textStyle     = MaterialTheme.typography.bodySmall
                     )
+
                     Spacer(Modifier.height(8.dp))
-                    Text("История", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
+
+                    Text(
+                        "История",
+                        style    = MaterialTheme.typography.labelMedium,
+                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+
                     Spacer(Modifier.height(4.dp))
+
                     val sessions = chatState.value.sessionHistory
                     val filteredPanel = remember(sessions, panelSearch) {
                         val q = panelSearch.trim().lowercase()
@@ -358,26 +387,48 @@ private fun ExpandedLayout(
                                     it.vehicleName?.lowercase()?.contains(q) == true
                         }
                     }
-                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+
+                    LazyColumn(
+                        modifier            = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         items(filteredPanel, key = { it.id }) { session ->
                             val isSelected = session.id == chatState.value.selectedSessionId
                             Surface(
-                                onClick = { vm?.loadSession(session.id) },
-                                shape   = MaterialTheme.shapes.small,
-                                color   = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                                          else MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.fillMaxWidth()
+                                onClick        = { vm?.loadSession(session.id) },
+                                shape          = MaterialTheme.shapes.small,
+                                color          = if (isSelected)
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                else
+                                    MaterialTheme.colorScheme.surface,
+                                modifier       = Modifier.fillMaxWidth()
                             ) {
-                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
-                                    Text(text = session.title, style = MaterialTheme.typography.bodySmall,
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text       = session.title,
+                                        style      = MaterialTheme.typography.bodySmall,
                                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        maxLines   = 2,
+                                        overflow   = TextOverflow.Ellipsis
+                                    )
                                     if (!session.vehicleName.isNullOrBlank()) {
-                                        Text(text = session.vehicleName, style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            text     = session.vehicleName,
+                                            style    = MaterialTheme.typography.labelSmall,
+                                            color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
-                                    Text(text = session.dateLabel, style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text  = session.dateLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
@@ -395,9 +446,10 @@ private fun ExpandedLayout(
             activeModelName     = activeModelName,
             currentTheme        = currentTheme,
             healthWarning       = healthWarning,
-            startDestination    = startDest,
             widthSizeClass      = WindowWidthSizeClass.Medium,
-            modifier            = Modifier.weight(1f).fillMaxHeight()
+            modifier            = Modifier
+                .weight(1f)
+                .fillMaxHeight()
         )
     }
 }
@@ -410,9 +462,14 @@ private fun BrpNavigationRail(
     NavigationRail(
         modifier = Modifier.fillMaxHeight(),
         header = {
-            Icon(imageVector = Icons.Default.TwoWheeler, contentDescription = "BRP",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 16.dp, bottom = 8.dp).size(28.dp))
+            Icon(
+                imageVector        = Icons.Default.TwoWheeler,
+                contentDescription = "BRP",
+                tint               = MaterialTheme.colorScheme.primary,
+                modifier           = Modifier
+                    .padding(top = 16.dp, bottom = 8.dp)
+                    .size(28.dp)
+            )
         }
     ) {
         Spacer(Modifier.weight(1f))
@@ -440,28 +497,14 @@ private fun NavHostContent(
     activeModelName: String?,
     currentTheme: String,
     healthWarning: String?,
-    startDestination: String = Screen.Home.route,
     widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
     modifier: Modifier = Modifier
 ) {
     NavHost(
         navController    = navController,
-        startDestination = startDestination,
+        startDestination = Screen.Home.route,
         modifier         = modifier
     ) {
-        // Онбординг: показывается только если onboardingCompleted == false
-        composable(Screen.Onboarding.route) {
-            OnboardingScreen(
-                totalRamGb = mainViewModel.totalRamGb,
-                deviceInfo = mainViewModel.deviceInfo,
-                onFinish   = {
-                    mainViewModel.completeOnboarding()
-                    navController.navigate(Screen.Home.route) {
-                        popUpTo(Screen.Onboarding.route) { inclusive = true }
-                    }
-                }
-            )
-        }
         composable(Screen.Home.route) {
             HomeScreen(
                 healthWarning           = healthWarning,
@@ -513,7 +556,9 @@ private fun NavHostContent(
                 onClearSelection    = { compareVm.clearSelection() },
                 onCompareWithAI     = {
                     val names = state.selectedModels.joinToString(", ") { it.modelName }
-                    navController.navigate(Screen.Chat.createRoute("both", "Сравни технику BRP: $names"))
+                    navController.navigate(
+                        Screen.Chat.createRoute("both", "Сравни технику BRP: $names")
+                    )
                 },
                 onDismissLimitToast = { compareVm.dismissLimitToast() },
                 onBack              = { navController.popBackStack() }
@@ -556,10 +601,12 @@ private fun NavHostContent(
             }
             val chatVm: ChatViewModel = hiltViewModel()
             val state by chatVm.state.collectAsStateWithLifecycle()
+
             DisposableEffect(chatVm) {
                 SharedChatVmHolder.chatVm = chatVm
                 onDispose { SharedChatVmHolder.chatVm = null }
             }
+
             LaunchedEffect(selectedVehicleId, mode) {
                 chatVm.clearForChat(selectedVehicleId, selectedVehicleName, mode)
             }
@@ -568,6 +615,7 @@ private fun NavHostContent(
                     chatVm.sendMessage(initialQuery, mode, selectedVehicleId)
                 }
             }
+
             ChatScreen(
                 title                  = when (mode) { "diagnosis" -> "Диагностика"; "accessory" -> "Аксессуары"; else -> "Чат" },
                 messages               = state.messages,
@@ -644,26 +692,28 @@ private fun NavHostContent(
             val modelVm: ModelManagerViewModel = hiltViewModel()
             val state by modelVm.state.collectAsStateWithLifecycle()
             ModelManagerScreen(
-                state                      = state,
-                onDownload                 = { modelVm.downloadModel(it) },
-                onActivate                 = { modelVm.activateModel(it) },
-                onDelete                   = { modelVm.deleteModel(it) },
-                onAddFromFile              = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
-                onAddFromUrl               = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
-                onUpdateApiKey             = { modelVm.updateApiKey(it) },
-                onUpdateProvider           = { modelVm.updateAiProvider(it) },
-                onUpdateModel              = { modelVm.updateAiModel(it) },
-                onUpdateSystemPrompt       = { modelVm.updateSystemPrompt(it) },
-                onUpdateTemperature        = { modelVm.updateTemperature(it) },
-                onConfirmUnsafeDownload    = { modelVm.confirmUnsafeDownload() },
-                onDismissPendingWarning    = { modelVm.dismissPendingWarning() },
-                onClearError               = { modelVm.clearError() },
-                onNavigate                 = { route -> navigateSafe(navController, route) },
-                onBack                     = { navController.popBackStack() }
+                state                = state,
+                onDownload           = { modelVm.downloadModel(it) },
+                onActivate           = { modelVm.activateModel(it) },
+                onDelete             = { modelVm.deleteModel(it) },
+                onAddFromFile        = { uri, name -> modelVm.addCustomModelFromFile(uri, name) },
+                onAddFromUrl         = { title, url -> modelVm.addCustomModelFromUrl(title, url) },
+                onUpdateApiKey       = { modelVm.updateApiKey(it) },
+                onUpdateProvider     = { modelVm.updateAiProvider(it) },
+                onUpdateModel        = { modelVm.updateAiModel(it) },
+                onUpdateSystemPrompt = { modelVm.updateSystemPrompt(it) },
+                onUpdateTemperature  = { modelVm.updateTemperature(it) },
+                onClearError         = { modelVm.clearError() },
+                onNavigate           = { route -> navigateSafe(navController, route) },
+                onBack               = { navController.popBackStack() }
             )
         }
         composable(Screen.UserDocs.route) {
-            UserDocsScreen(onBack = { navController.popBackStack() })
+            UserDocsScreen(
+                onBack = { navController.popBackStack() }
+            )
         }
+        // Screen.Onboarding: маршрут зарегистрирован, экран будет добавлен в отдельном PR
+        // composable(Screen.Onboarding.route) { ... }
     }
 }
