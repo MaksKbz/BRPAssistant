@@ -3,6 +3,7 @@ name: PR Checks
 on:
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,8 +31,8 @@ jobs:
       - name: Check wrapper executable
         run: |
           chmod +x ./gradlew || true
-          ls -lh ./gradlew || echo "gradlew not found, using bare gradle"
-          ls -lh gradle/wrapper/ || echo "wrapper dir missing"
+          ls -lh ./gradlew
+          ls -lh gradle/wrapper/
 
       - name: Run unit tests + lint + debug build
         run: |
