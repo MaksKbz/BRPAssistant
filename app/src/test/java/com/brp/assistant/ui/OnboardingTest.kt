@@ -56,7 +56,7 @@ class OnboardingTest {
         val llmEngine = mockk<com.brp.assistant.data.llm.LlmInferenceEngine>(relaxed = true)
         every { llmEngine.activeModelId } returns flowOf(null)
         val healthChecker = mockk<AppHealthChecker>(relaxed = true)
-        every { healthChecker.status } returns flowOf(HealthStatus(isLowDisk = false, isDbError = false))
+        every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         val deviceProvider = mockk<DeviceCapabilityProvider>(relaxed = true)
         every { deviceProvider.formatDeviceInfo() } returns "Test Device"
         every { deviceProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
