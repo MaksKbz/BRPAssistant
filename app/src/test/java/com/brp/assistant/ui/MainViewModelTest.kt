@@ -14,7 +14,6 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Assert.*
@@ -46,10 +45,10 @@ class MainViewModelTest {
         deviceCapabilityProvider = mockk(relaxed = true)
 
         every { settingsRepo.selectedVehicleId } returns vehicleIdFlow
-        every { settingsRepo.appTheme } returns flowOf("System")
-        every { settingsRepo.onboardingCompleted } returns flowOf(true)
-        every { settingsRepo.selectedVehicleName } returns flowOf<String?>(null)
-        every { llmEngine.activeModelId } returns flowOf<String?>(null)
+        every { settingsRepo.appTheme } returns MutableStateFlow("System")
+        every { settingsRepo.onboardingCompleted } returns MutableStateFlow(true)
+        every { settingsRepo.selectedVehicleName } returns MutableStateFlow<String?>(null)
+        every { llmEngine.activeModelId } returns MutableStateFlow<String?>(null)
         every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         every { deviceCapabilityProvider.formatDeviceInfo() } returns "Test Device"
         every { deviceCapabilityProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
