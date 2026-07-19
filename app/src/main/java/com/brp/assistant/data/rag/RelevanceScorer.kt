@@ -132,7 +132,7 @@ class RelevanceScorer @Inject constructor() {
             if (combined.contains("gun")) score += 30f
             if (combined.contains("case") && combined.contains("gun")) score += 20f
         }
-        if (listOf("еда", "ед", "продукт", "холод", "пикник", "cooler").any { q.contains(it) }) {
+        if (listOf("еда", "еду", "пища", "продукт", "холодильник", "cooler", "пикник", "термос", "холод").any { q.contains(it) }) {
             if (combined.contains("cooler")) score += 35f
             if (combined.contains("bag") || combined.contains("box") || combined.contains("сумка") || combined.contains("кофр")) score += 10f
         }

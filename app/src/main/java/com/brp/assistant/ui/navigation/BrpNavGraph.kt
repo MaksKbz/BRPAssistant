@@ -33,6 +33,7 @@ import com.brp.assistant.ui.docs.UserDocsScreen
 import com.brp.assistant.ui.home.HomeScreen
 import com.brp.assistant.ui.model.ModelManagerScreen
 import com.brp.assistant.ui.model.ModelManagerViewModel
+import com.brp.assistant.ui.onboarding.OnboardingScreen
 import com.brp.assistant.ui.situations.SituationsScreen
 import com.brp.assistant.ui.situations.SituationsViewModel
 import com.brp.assistant.ui.maintenance.MaintenanceScreen
@@ -129,6 +130,29 @@ fun BrpNavGraph(
     val activeModelName     by mainViewModel.activeModelName.collectAsStateWithLifecycle()
     val currentTheme        by mainViewModel.appTheme.collectAsStateWithLifecycle()
     val healthWarning       by mainViewModel.healthWarning.collectAsStateWithLifecycle()
+    val onboardingCompleted by mainViewModel.onboardingCompleted.collectAsStateWithLifecycle()
+
+    // P0 — Onboarding root gate: показываем приветствие до загрузки Home
+    when (onboardingCompleted) {
+        null -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            return
+        }
+        false -> {
+            OnboardingScreen(
+                totalRamGb = mainViewModel.totalRamGb,
+                deviceInfo = mainViewModel.deviceInfo,
+                onFinish = { mainViewModel.completeOnboarding() }
+            )
+            return
+        }
+        true -> Unit
+    }
 
     val configuration = LocalConfiguration.current
     val effectiveSizeClass = when {
@@ -644,7 +668,10 @@ private fun NavHostContent(
                 selectedSessionId      = state.selectedSessionId,
                 onSelectSession        = { id -> chatVm.loadSession(id) },
                 onNewChat              = { chatVm.startNewChat(selectedVehicleId, selectedVehicleName, mode) },
-                onDeleteSession        = { id -> chatVm.deleteSession(id) }
+                onDeleteSession        = { id -> chatVm.deleteSession(id) },
+                pendingDownloadWarning = state.pendingDownloadWarning,
+                onConfirmUnsafeDownload = { chatVm.confirmUnsafeModelDownload() },
+                onDismissPendingWarning = { chatVm.dismissUnsafeModelDownload() }
             )
         }
         composable(Screen.Diagnose.route) {

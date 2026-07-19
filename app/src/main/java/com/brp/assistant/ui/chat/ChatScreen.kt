@@ -334,7 +334,10 @@ fun ChatScreen(
     onSelectSession: (String) -> Unit = {},
     onNewChat: () -> Unit = {},
     /** #14 — удаление сессии свайпом */
-    onDeleteSession: (String) -> Unit = {}
+    onDeleteSession: (String) -> Unit = {},
+    pendingDownloadWarning: String? = null,
+    onConfirmUnsafeDownload: () -> Unit = {},
+    onDismissPendingWarning: () -> Unit = {}
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -344,6 +347,24 @@ fun ChatScreen(
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+
+    if (pendingDownloadWarning != null) {
+        AlertDialog(
+            onDismissRequest = onDismissPendingWarning,
+            title = { Text("Предупреждение о памяти") },
+            text = { Text(pendingDownloadWarning) },
+            confirmButton = {
+                Button(onClick = onConfirmUnsafeDownload) {
+                    Text("Скачать всё равно")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissPendingWarning) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 
     val activeLlmLabel: String = when {

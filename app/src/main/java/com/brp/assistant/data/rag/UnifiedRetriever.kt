@@ -221,7 +221,7 @@ class UnifiedRetriever @Inject constructor(
         val hasSpecificFitment =
             !(acc.compatiblePlatforms.isNullOrBlank() || acc.compatiblePlatforms == "[]") ||
             !(acc.compatibleModels.isNullOrBlank() || acc.compatibleModels == "[]")
-        return platformOk || modelIdOk || (brandOk && (categoryOk || !hasSpecificFitment)) || (brandOk && acc.category == "storage")
+        return platformOk || modelIdOk || (brandOk && (categoryOk || !hasSpecificFitment)) || (brandOk && acc.category.equals("storage", ignoreCase = true))
     }
 
     private fun scoreAccessoryWeighted(
@@ -234,7 +234,7 @@ class UnifiedRetriever @Inject constructor(
         val text = "${acc.name} ${acc.description} ${acc.sku} ${acc.tags} ${acc.category} ${acc.subcategory}".lowercase()
         var s = 0f
         val isGunQuery = listOf("руж", "оруж", "винтовк", "карабин", "охот", "gun", "стрел").any { q.contains(it) }
-        val isFoodQuery = listOf("ед", "еда", "продукт", "холод", "напитк", "термос", "пищ", "куша", "пить", "вода", "пикник").any { q.contains(it) }
+        val isFoodQuery = listOf("еда", "еду", "пища", "пищев", "продукт", "напит", "холодильник", "cooler", "пикник", "термос", "холод").any { q.contains(it) }
         val isCargoQuery = listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк", "багажник").any { q.contains(it) }
 
         if (isGunQuery) {
@@ -279,7 +279,7 @@ class UnifiedRetriever @Inject constructor(
         if (listOf("руж", "оружи", "винтовк", "карабин", "охот", "gun", "стрел").any { q.contains(it) }) {
             words.addAll(listOf("gun", "case", "boot", "holder", "руж"))
         }
-        if (listOf("ед", "еда", "продукт", "холод", "напитк", "термос", "пищ", "куша", "пить", "вода", "пикник").any { q.contains(it) }) {
+        if (listOf("еда", "еду", "пища", "пищев", "продукт", "напит", "холодильник", "cooler", "пикник", "термос", "холод").any { q.contains(it) }) {
             words.addAll(listOf("cooler", "холодильник", "bag", "сумка", "box", "кофр"))
         }
         if (listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк", "багажник").any { q.contains(it) }) {

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Assemble Release APK
@@ -33,35 +37,25 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      # ── Авто-бамп патч-версии ────────────────────────────────────────────
-      # Поднимает versionName (патч) и versionCode на 1,
-      # коммитит в main с [skip ci] — не запускает новую сборку.
-      - name: Bump patch version
+      # ── Compute new version (without pushing yet) ─────────────────────
+      - name: Compute new version
         id: bump
         run: |
           GRADLE=app/build.gradle.kts
-
           OLD_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$GRADLE")
           OLD_CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$GRADLE")
-
           IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_NAME"
           NEW_PATCH=$((PATCH + 1))
           NEW_NAME="${MAJOR}.${MINOR}.${NEW_PATCH}"
           NEW_CODE=$((OLD_CODE + 1))
-
-          echo "🔼 Версия: $OLD_NAME → $NEW_NAME  |  versionCode: $OLD_CODE → $NEW_CODE"
-
+          echo "🔼 Version: $OLD_NAME → $NEW_NAME | versionCode: $OLD_CODE → $NEW_CODE"
+          # Update file in workspace for build
           sed -i "s/versionName = \"${OLD_NAME}\"/versionName = \"${NEW_NAME}\"/" "$GRADLE"
           sed -i "s/versionCode = ${OLD_CODE}/versionCode = ${NEW_CODE}/" "$GRADLE"
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$GRADLE"
-          git commit -m "chore: bump version $OLD_NAME → $NEW_NAME (versionCode $NEW_CODE) [skip ci]"
-          git push
-
           echo "new_version=$NEW_NAME" >> $GITHUB_OUTPUT
-          echo "new_code=$NEW_CODE"    >> $GITHUB_OUTPUT
+          echo "new_code=$NEW_CODE" >> $GITHUB_OUTPUT
+          echo "old_name=$OLD_NAME" >> $GITHUB_OUTPUT
+          echo "old_code=$OLD_CODE" >> $GITHUB_OUTPUT
 
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace --no-daemon
@@ -78,7 +72,6 @@ jobs:
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
           if [ -z "$APK" ]; then echo "ERROR: APK not found!"; exit 1; fi
-
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
             --ks release.p12 \
@@ -89,6 +82,7 @@ jobs:
             --out app-release-signed.apk \
             "$APK"
           ls -lh app-release-signed.apk
+          sha256sum app-release-signed.apk
 
       - name: Verify APK
         run: |
@@ -99,30 +93,55 @@ jobs:
         run: |
           mv app-release-signed.apk \
             BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
+          ls -lh BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
+          sha256sum BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk > BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk.sha256
+          cat BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk.sha256
 
-      # ── Публикация ──────────────────────────────────────────────────────
-      # Используем постоянный тег "latest" — в Releases всегда ровно
-      # один APK, актуальный. Имя файла меняется при каждом пуше.
-      # Старые сборки доступны через историю коммитов в main.
-      - name: Publish to GitHub Releases
+      # ── Commit version bump ONLY after successful build ───────────────
+      - name: Commit version bump after successful build
+        run: |
+          GRADLE=app/build.gradle.kts
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$GRADLE"
+          git commit -m "chore: bump version ${{ steps.bump.outputs.old_name }} → ${{ steps.bump.outputs.new_version }} (versionCode ${{ steps.bump.outputs.new_code }}) [skip ci]"
+          git push
+
+      # ── Versioned release (one APK per tag, no rolling 14-APK release) ─
+      - name: Publish to GitHub Releases (versioned)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "BRPAssistant v${{ steps.bump.outputs.new_version }} — актуальная"
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          name: "BRPAssistant v${{ steps.bump.outputs.new_version }}"
           body: |
             ## BRPAssistant v${{ steps.bump.outputs.new_version }}
 
             ${{ github.event.head_commit.message }}
 
-            ### Установка
-            1. Скачайте APK ниже
-            2. На Android: Настройки → Безопасность → Разрешить установку из неизвестных источников
-            3. Откройте скачанный APK и установите
+            ### Changes
+            - CI: versioned releases, bump after successful build, concurrency group release-main
+            - Onboarding wired as root gate, shows on first launch
+            - InferenceResourceMonitor wired via LocalInferenceUseCase.generatePreparedPrompt
+            - Safe download warning added to ChatViewModel/ChatScreen
+            - RAG: fixed false trigger "ед" → specific food terms, case-insensitive category checks
+            - Full asset DB: 56 models, 2084 accessories, 1749 cards, 3905 chunks
 
-            ### Требования
+            ### Installation
+            1. Download APK below
+            2. Android: Settings → Security → Allow unknown sources
+            3. Open APK and install
+
+            ### Requirements
             - Android 11+ (API 30)
-            - 2 ГБ RAM минимум (рекомендуется 4+ ГБ для офлайн-моделей)
-          files: BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
+            - 2 GB RAM min (4+ GB recommended for offline models)
+
+            ### SHA-256
+            ```
+            ${{ steps.bump.outputs.new_version }}
+            ```
+          files: |
+            BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
+            BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk.sha256
           make_latest: true
           generate_release_notes: false
           prerelease: false
@@ -145,6 +164,9 @@ jobs:
           APK="BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk"
           if [ -f "$APK" ]; then
             SIZE=$(ls -lh "$APK" | awk '{print $5}')
+            SHA=$(cat "$APK.sha256" | awk '{print $1}')
             echo "- **Размер APK:** $SIZE" >> $GITHUB_STEP_SUMMARY
+            echo "- **SHA-256:** $SHA" >> $GITHUB_STEP_SUMMARY
+            echo "- **Тег:** v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "📦 https://github.com/${{ github.repository }}/releases/latest" >> $GITHUB_STEP_SUMMARY
+          echo "📦 https://github.com/${{ github.repository }}/releases/tag/v${{ steps.bump.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY

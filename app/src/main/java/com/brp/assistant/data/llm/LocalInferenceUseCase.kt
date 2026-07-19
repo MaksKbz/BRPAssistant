@@ -100,6 +100,16 @@ class LocalInferenceUseCase @Inject constructor(
     }
 
     /**
+     * P0: генерирует ответ по уже готовому промпту (с RAG).
+     * Используется в ChatUseCase/DiagnoseUseCase чтобы сохранить их новый RAG-путь,
+     * но пропустить генерацию через единую точку проверки ресурсов.
+     */
+    suspend fun generatePreparedPrompt(
+        prompt: String,
+        onPartial: (String) -> Unit
+    ): Result<String> = runInference(prompt, onPartial)
+
+    /**
      * Обрезает историю целыми сообщениями если суммарная длина
      * userMessage + history превышает MAX_PROMPT_CHARS.
      * Удаляет старые сообщения с начала, сохраняя последние.

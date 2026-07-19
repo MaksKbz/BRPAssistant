@@ -19,7 +19,7 @@ import javax.inject.Inject
  */
 private fun isSimpleQuestion(message: String): Boolean {
     val lower = message.trim().lowercase()
-    val accessoryKeywords = listOf("аксессуар", "кофр", "багаж", "сумк", "руж", "оруж", "ед", "еда", "холод", "cooler", "gun", "перевоз", "груз", "кронштейн", "креплен")
+    val accessoryKeywords = listOf("аксессуар", "кофр", "багаж", "сумк", "руж", "оруж", "еда", "еду", "пища", "холод", "холодильник", "cooler", "gun", "перевоз", "груз", "кронштейн", "креплен")
     if (accessoryKeywords.any { lower.contains(it) }) return false
     if (lower.length > 80) return false
     val triggers = listOf(
@@ -36,6 +36,7 @@ class DiagnoseUseCase @Inject constructor(
     private val retriever: UnifiedRetriever,
     private val promptBuilder: PromptBuilder,
     private val llm: LlmInferenceEngine,
+    private val localInference: com.brp.assistant.data.llm.LocalInferenceUseCase,
     private val remoteLlm: RemoteLlmEngine,
     private val settingsRepository: SettingsRepository,
     private val modelRepository: com.brp.assistant.data.repository.ModelRepository
@@ -98,7 +99,7 @@ class DiagnoseUseCase @Inject constructor(
                 return@flow
             }
 
-            // ЛОКАЛЬНАЯ: компактный промпт с топ-3 картами + релевантные чанки
+            // ЛОКАЛЬНАЯ: через LocalInferenceUseCase с проверкой ресурсов
             if (!useRemote) {
                 val localPrompt = promptBuilder.buildLocalChatPrompt(
                     userMessage = message,
@@ -108,7 +109,7 @@ class DiagnoseUseCase @Inject constructor(
                     chunks = matchedChunks.take(4),
                     userChunks = userChunks.take(4)
                 )
-                val localResult = llm.generateResponse(localPrompt, onPartial)
+                val localResult = localInference.generatePreparedPrompt(localPrompt, onPartial)
                 localResult.onSuccess { text ->
                     emit(Result.success(DiagnosisResult(
                         message = text,
@@ -159,6 +160,7 @@ class ChatUseCase @Inject constructor(
     private val retriever: UnifiedRetriever,
     private val promptBuilder: PromptBuilder,
     private val llm: LlmInferenceEngine,
+    private val localInference: com.brp.assistant.data.llm.LocalInferenceUseCase,
     private val remoteLlm: RemoteLlmEngine,
     private val settingsRepository: SettingsRepository,
     private val modelRepository: com.brp.assistant.data.repository.ModelRepository
@@ -208,7 +210,7 @@ class ChatUseCase @Inject constructor(
             else emptyList()
         }
 
-        // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: компактный сфокусированный промпт.
+        // ДЛЯ ЛОКАЛЬНЫХ МОДЕЛЕЙ: через LocalInferenceUseCase с guard RAM/battery
         if (!useRemote) {
             val localPrompt = promptBuilder.buildLocalChatPrompt(
                 userMessage = message,
@@ -219,7 +221,7 @@ class ChatUseCase @Inject constructor(
                 chunks = chunks.take(4),
                 userChunks = userChunks.take(4)
             )
-            return llm.generateResponse(localPrompt, onPartial)
+            return localInference.generatePreparedPrompt(localPrompt, onPartial)
         }
 
         // ОНЛАЙН: полный промпт с RAG

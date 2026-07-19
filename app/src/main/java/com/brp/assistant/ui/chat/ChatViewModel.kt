@@ -74,7 +74,9 @@ data class ChatState(
     val selectedSessionId: String? = null,
     val hasOnlineKeyMissing: Boolean = false,
     val healthWarning: String? = null,
-    val searchQuery: String = ""
+    val searchQuery: String = "",
+    val pendingDownloadWarning: String? = null,
+    val pendingModelToDownload: com.brp.assistant.data.llm.OfflineModelInfo? = null
 )
 
 @HiltViewModel
@@ -88,6 +90,7 @@ class ChatViewModel @Inject constructor(
     private val healthChecker: AppHealthChecker,
     private val deviceCapability: DeviceCapabilityProvider,
     private val downloader: com.brp.assistant.data.llm.download.PublicHuggingFaceModelDownloader,
+    private val recommendLlmModeUseCase: com.brp.assistant.domain.usecase.RecommendLlmModeUseCase,
     /**
      * A3 — SavedStateHandle позволяет пережить гибель процесса Android (OOM-kill).
      * selectedSessionId и currentMode восстанавливаются автоматически.
@@ -392,12 +395,29 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun downloadFromChat(model: com.brp.assistant.data.llm.OfflineModelInfo) {
+        // P0: проверка безопасности модели перед скачиванием из чата (как в ModelManager)
+        val recommendation = recommendLlmModeUseCase.evaluate(model)
+        if (!recommendation.isSafe) {
+            _state.update {
+                it.copy(
+                    pendingDownloadWarning = recommendation.warningMessage,
+                    pendingModelToDownload = model
+                )
+            }
+            return
+        }
+        startChatDownload(model)
+    }
+
+    private fun startChatDownload(model: com.brp.assistant.data.llm.OfflineModelInfo) {
         viewModelScope.launch {
             _state.update {
                 it.copy(
                     chatDownloadModelId = model.id,
                     chatDownloadProgress = 0f,
                     chatDownloadError = null,
+                    pendingDownloadWarning = null,
+                    pendingModelToDownload = null,
                     error = "⬇️ Скачиваю ${model.title}..."
                 )
             }
@@ -437,6 +457,16 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun confirmUnsafeModelDownload() {
+        val model = _state.value.pendingModelToDownload ?: return
+        _state.update { it.copy(pendingDownloadWarning = null, pendingModelToDownload = null) }
+        startChatDownload(model)
+    }
+
+    fun dismissUnsafeModelDownload() {
+        _state.update { it.copy(pendingDownloadWarning = null, pendingModelToDownload = null) }
+    }
+
     fun selectOnlineLlm(provider: String) {
         viewModelScope.launch {
             // Глобально выбираем онлайн — применяется ко ВСЕМ чатам
@@ -465,24 +495,28 @@ class ChatViewModel @Inject constructor(
         val effectiveVehicleId = vehicleId ?: _state.value.currentVehicleId
 
         generationJob = viewModelScope.launch {
-            val mem = deviceCapability.checkMemory()
-            if (!mem.isSafeForGeneration) {
-                val oomMsg = "⚠️ Недостаточно памяти (heap: ~${mem.freeHeapMb} МБ, RAM: ~${mem.availRamMb} МБ). " +
-                        "Закройте другие приложения и повторите."
-                _state.update {
-                    it.copy(isGenerating = false, error = oomMsg,
-                        messages = it.messages + ChatMessage(content = oomMsg, role = MessageRole.ASSISTANT))
+            // Глобальный выбор модели: если в DataStore выбран онлайн — forceRemote.
+            val forceRemote = _state.value.selectedOnlineProvider != null
+                || settingsRepository.chatForceOnline.first() != null
+
+            // P0: проверка памяти только для локального пути, чтобы не блокировать Gemini/Groq
+            if (!forceRemote) {
+                val mem = deviceCapability.checkMemory()
+                if (!mem.isSafeForGeneration) {
+                    val oomMsg = "⚠️ Недостаточно памяти (heap: ~${mem.freeHeapMb} МБ, RAM: ~${mem.availRamMb} МБ). " +
+                            "Закройте другие приложения и повторите."
+                    _state.update {
+                        it.copy(isGenerating = false, error = oomMsg,
+                            messages = it.messages + ChatMessage(content = oomMsg, role = MessageRole.ASSISTANT))
+                    }
+                    return@launch
                 }
-                return@launch
             }
 
             val resolvedVehicleName = vehicleName ?: _state.value.currentVehicleName
             val sessionId = ensureSession(text, vehicleId, resolvedVehicleName, mode)
 
             val history = _state.value.messages
-            // Глобальный выбор модели: если в DataStore выбран онлайн — forceRemote.
-            val forceRemote = _state.value.selectedOnlineProvider != null
-                || settingsRepository.chatForceOnline.first() != null
             var assistantContent = ""
             var assistantSources: List<String> = emptyList()
             var assistantRisk: String = "low"
