@@ -1,90 +1,93 @@
-# Прогресс работ — ИИ-агент по загруженной базе знаний
+# Прогресс работ — BRP Assistant v2.9.23 (после аудита)
 
-**Дата:** 2026-07-16
-**Ветка:** `arena/019f6aa9-brpassistant`
-**Версия БД:** 9 (новый PRAGMA user_version = 9)
+**Дата:** 2026-07-19
+**Версия:** 2.9.23, versionCode 69
+**Ветка:** main
+**Последний тег:** v2.9.23 (versioned release, make_latest=true)
+**CI:** Debug и Release зелёные для a01595a и f0313c1, PR Checks workflow добавлен
 
-## ✅ Завершено на этом заходе
+## Что было исправлено по аудиту v2.9.21
 
-### Фаза 2 — RAG и поиск
-1. **RAG включён для ЛОКАЛЬНЫХ моделей** (ранее `if (!useRemote) cards = emptyList()` полностью выключал базу знаний в офлайне). Теперь локалка получает top-3 карточки + top-4 релевантных чанка + пользовательские документы.
-2. **SystemPromptProvider** — системный промпт подгружается из `assets/prompts/system_prompt.txt` (22 правила по брендам/двигателям BRP), а не из 1-строчного хардкода.
-3. **SynonymDictionary** — словарь сленга/синонимов: квадрик→atv, гидрик→pwc, снежик→snowmobile, ютик→ssv, а также проблем (глохнет→stall, греется→перегрев, буксует→cvt и т.д.). Подключён в FTS-ретривер и в поиск аксессуаров.
-4. **Чанкинг карточек знаний (KnowledgeChunk)**:
-   - Новая таблица `knowledge_chunks` + FTS `knowledge_chunks_fts`.
-   - 613 чанков из 99 markdown-карточек (разбиты по H2/H3: причины, что можно, что нельзя, когда к дилеру и т.д.).
-   - `tools/build_database.py` генерирует чанки при сборке БД.
-   - `KnowledgeChunkInitializer` при первом запуске приложения достраивает чанки, если БД пришла из старой версии.
-   - `UnifiedRetriever` теперь сначала ищет по чанкам (более точные попадания), затем агрегирует до карточек.
-5. **Плотный локальный промпт** — `buildLocalChatPrompt` теперь структурированно подаёт:
-   - Данные о технике клиента
-   - Фрагменты БЗ в формате `[Секция/узел] текст` (до 450 символов каждый)
-   - Фрагменты из «ВАШЕЙ БАЗЫ ЗНАНИЙ» с именем документа
-   - Инструкции/карточки (причины / что делать / нельзя)
-   - Аксессуары с SKU, ценой и флагом установки у дилера
-   - Явный hint: «Если риск high/critical — предупреди в первой строке. Не выдумывай ничего сверх инструкций.»
-6. **Порог релевантности снижен с 3.0 до 1.5**, чтобы чанки с неточным совпадением тоже попадали в выдачу.
-7. **Троттлинг стриминга** в `ChatViewModel` — UI перерисовывается не чаще чем раз в 40 мс (а не на каждый токен 20-50 раз/с), что снимает лаги на бюджетных устройствах.
+### P0 — Onboarding как root gate
+- В `BrpNavGraph.kt` добавлен gate перед NavHost:
+  - `onboardingCompleted == null` → CircularProgressIndicator
+  - `false` → OnboardingScreen(totalRamGb, deviceInfo, onFinish)
+  - `true` → основной NavGraph
+- Показывается при первом запуске, не попадает в back stack, не мелькает.
 
-### Фаза 2.4 — Источники ответа
-8. **Хранение источников ответа**:
-   - В `chat_messages` добавлено поле `sources TEXT` (JSON-массив имён карточек, на которых основан ответ).
-   - `ChatMessageEntity.sources`, сериализация/десериализация в `ChatViewModel`.
-   - Миграция v7→v8 (`ALTER TABLE chat_messages ADD COLUMN sources TEXT`).
-9. **UI-блок «Источники: N»** под каждым ответом ассистента (раскрывающийся, с иконкой «книга» в tertiary-контейнере).
+### P0 — InferenceResourceMonitor подключён к реальному пути
+- Добавлен `LocalInferenceUseCase.generatePreparedPrompt()` — единая точка с checkMemory(), batteryWarning (только лог, не через onPartial), engine.generateResponse()
+- ChatUseCase и DiagnoseUseCase инжектят localInference и используют его для локального пути
+- ChatViewModel: проверка памяти только если !forceRemote, не блокирует Gemini/Groq
+- recommendedMaxTokens помечен как informational (Variant B, MediaPipe требует re-init)
 
-### Фаза 4 — Пользовательская база знаний
-10. **Таблицы пользовательских документов** (`user_documents`, `user_document_chunks`, `user_document_chunks_fts`) + миграция v8→v9.
-11. **UserDocumentsRepository** — добавление .md/.txt через SAF (`OpenDocument`), разбиение на чанки (~800 символов на чанок, по абзацам и H2-заголовкам), удаление документов.
-12. **Экран «Моя база знаний»** (`UserDocsScreen` + `UserDocsViewModel`):
-    - FAB «Добавить .md/.txt» с системным file-picker'ом (SAF с персистентным пермишеном на чтение).
-    - Список документов с размером и датой добавления.
-    - Удаление через диалог подтверждения.
-    - Snackbar-уведомления об успехе/ошибке.
-13. **Навигация**: маршрут `user-docs` + кнопка «Моя база» в разделе «Настройки» на HomeScreen (пара плиток с «Настройки ИИ»).
-14. **Ретривер ищет по пользовательским чанкам** и передаёт их в промпт через блок «ИЗ ВАШЕЙ БАЗЫ ЗНАНИЙ» с пометкой приоритета: «Если информация есть в «ВАШЕЙ БАЗЕ ЗНАНИЙ» — приоритет ей».
-15. **Обновлён `build_database.py`** — БД пересобрана с версией 9, со всеми таблицами (чанки встроенных карточек, пустые таблицы пользовательских документов).
+### P0 — Safe download везде
+- ChatState: pendingDownloadWarning + pendingModelToDownload
+- ChatViewModel: RecommendLlmModeUseCase проверка перед downloadFromChat(), confirm/dismiss
+- ChatScreen: AlertDialog "Скачать всё равно"/"Отмена"
+- BrpNavGraph прокидывает параметры
 
-## 📊 Статус БД (asset)
-| Показатель | Значение |
-|---|---|
-| `PRAGMA user_version` | 9 |
-| Моделей BRP 2026 | 56 |
-| Аксессуаров | 34 |
-| Карточек знаний | 98 |
-| Чанков карточек | 613 |
-| Fault codes | 14 |
-| Пользовательских документов | 0 (добавляются в runtime) |
+### P1 — Release workflow
+- Versioned теги v2.9.22, v2.9.23 (1 APK + sha256), make_latest:true
+- Bump после успешной sign/verify, concurrency group release-main
+- SHA-256 и размер в summary
+- Старый rolling release `latest` (12 APK, tag latest → 9a4d809) удалён — теперь latest flag указывает на v2.9.23
 
-## 🔜 Следующие шаги (по приоритету)
+### P1 — CI до merge
+- Добавлен `.github/workflows/ci-pr.yml`: testDebugUnitTest lintDebug assembleDebug на PR
+- Восстановлен gradle-wrapper.jar (43KB) и gradlew 755
+- Workflows обновлены до checkout@v5, setup-java@v5, убран android-actions/setup-android (SDK preinstalled), убраны Node20 warnings
 
-### Высокий приоритет — протестировать и отполировать
-1. **Собрать `assembleDebug` в Android Studio** — нужна среда с JDK 17 и Android SDK, в sandbox их нет, поэтому компиляцию надо прогнать локально. При возможных ошибках — поправить импорты/type inference.
-2. **Запустить на устройстве/эмуляторе** и проверить:
-   - старт приложения без краша на миграции БД (MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9);
-   - экран «Моя база» открывается и добавляет .txt/.md файлы;
-   - после добавления документа с ответом на конкретный вопрос ИИ использует его (фраза «ИЗ ВАШЕЙ БАЗЫ ЗНАНИЙ» должна попадать в промпт);
-   - в офлайн-режиме на вопрос «не заводится Outlander» в ответе присутствуют пункты из базы, а не общие слова;
-   - блок «Источники: N» появляется под ответами в режиме диагностики.
-3. **Исправить источники для обычного чата**: сейчас `DiagnosisResult.sources` наполняется, а `ChatUseCase` для `BOTH`/`ACCESSORY` режимов не возвращает список источников. Добавить обёртку результата и прокидывать sources из встроенных и пользовательских чанков.
-4. **Показать в UI, из чьего источника ответ**: в блоке «Источники» различать BRP-карточки и пользовательские документы (цвет/иконка).
+### P1 — Ложный триггер "ед"
+- Убран "ед" из всех списков, теперь еда/еду/пища/холодильник/cooler/пикник/термос/холод
+- Создан единый AccessoryIntentDetector (GUN, FOOD, CARGO, WINCH, LIGHT, HEATING, ROOF, DOORS, MIRROR, AUDIO, OTHER)
+- Category проверки: equals(..., ignoreCase=true)
+- Исправлено в UnifiedRetriever, UseCases, RelevanceScorer
 
-### Средний приоритет
-5. **Проверка ProGuard/R8** для `assembleRelease` — добавить правила для LiteRT-LM, MediaPipe и Room с FTS4.
-6. **Зафиксировать identity_hash БД** после первой успешной сборки — после прогона Room в `app/schemas/9.json` скопировать `identityHash` в `tools/build_database.py` (сейчас стоит `PLACEHOLDER_REBUILD_FROM_SCHEMAS`, но т.к. включён `fallbackToDestructiveMigration()`, это не крашит, но генерирует предупреждение в logcat).
-7. **Простые модульные тесты** на `SynonymDictionary.expand()`, `UnifiedRetriever.extractKeywords()`, чанкинг.
-8. **Markdown-рендер ответов** (жирный текст, списки, заголовки) — заменить `Text(...)` на простой MarkdownText Composable.
-9. **Intent Router** (автоматическое определение диагностика/аксессуары/сравнение/ТО) вместо завязки на таб.
+### P1 — Транзакционность и регрессии
+- BrpDatabase.UserDocumentDao: @Transaction insertDocumentWithChunks
+- UserDocumentsRepository: использует транзакционный метод
+- LocalInferenceUseCase: battery warning не через onPartial
+- Сохранены фиксы: userDocumentDao, chunkCount, FTS4 без rank, PromptBuilder Inject, ModelManager warning, asset DB 2084 аксессуаров
 
-### Длинная перспектива (Фаза 3)
-10. Tool Use (агентский цикл вызовов инструментов).
-11. Семантический поиск через эмбеддинги (MediaPipe Text Embedder + косинусная близость).
-12. OCR фотографий мануалов (ML Kit).
-13. Экран сравнения ответов с источниками и кнопкой «скопировать цитату».
+### P1 — Тесты
+- AccessoryIntentDetectorTest: gun/food/cargo, редуктор не еда
+- AccessoryRagRegressionTest: brand two-way, storage compatibility, incompatible brand filtered
+- UnifiedRetrieverRagTest: search words, storage always compatible
+- RecommendLlmModeUseCaseTest: unknown size safe, heavy warning
+- InferenceResourceMonitorTest: low heap/RAM, battery warning не в стриме
+- OnboardingTest: default false, complete persists, null не показывает Home
+- UserDocumentsRepositoryTest: chunkCount, empty rejected, transactional
+- CleanupWorkerTest: old sessions, .part 24ч
+- ChatViewModelSafeDownloadTest: confirm once, dismiss no download
 
-## ⚠️ Известные огрехи (требуют внимания при сборке)
-- Kotlin-компиляция не прогонялась в sandbox (нет JDK/Android SDK). При первой сборке могут всплыть:
-  - Мелкие type-inference предупреждения в `BrpDatabase.kt`/`UnifiedRetriever.kt`.
-  - Требуется импорт `com.brp.assistant.data.db.entities.UserDocumentChunk` в `UserDocumentsRepository.kt` — уже поправлен.
-  - Может понадобиться `@JvmOverloads` у `UserDocument` и `UserDocumentChunk` (все поля имеют defaults кроме обязательных).
-  - `KnowledgeChunkInitializer` вызывается из `App.onCreate` в `SupervisorJob` scope — все ошибки изолированы, не крашат старт.
+## Статус БД (asset)
+- models: 56
+- accessories: 2084 (2050 из каталогов)
+- knowledge cards: 1749
+- knowledge chunks: 3905
+- fault codes: 14
+- Gun accessories: LinQ Gun Case 715009240 etc
+- Cooler: Sea-Doo LinQ Cooler 779001476, Cargo Box 715003879 etc
+
+## Приёмка (из плана аудита) — все зелёные
+- Build/CI: PR Checks есть, test/lint/assemble зелёные, APK подписан verify, bump после зелёной сборки
+- Onboarding: первый запуск показывает, завершение сохраняется, повторный открывает Home
+- Resource monitor: локальный Chat/Diagnose вызывают monitor, remote не блокируется, battery warning не портит текст
+- Model download safety: Model Manager и Chat warning, cancel не качает, confirm один раз
+- RAG: gun case, cooler, редуктор не еда, фильтрация бренда
+- Release: tag v2.9.23 на актуальный commit, 1 APK + sha256, SHA опубликован
+- Регрессия DB: userDocumentDao, chunkCount, FTS4 без rank, Inject импорт
+
+## Осталось P2 (закрыто в этом коммите)
+- ✅ Удален старый rolling release `latest` (12 APK) — теперь только versioned v2.9.22/23
+- ✅ Workflows обновлены до Node24 (checkout@v5, setup-java@v5, убран setup-android, wrapper jar)
+- ✅ Обновлена документация CHANGES_PROGRESS.md
+- ⏳ Обновить README бейджами (опционально, можно в следующем PR)
+
+## Команды проверки
+```
+gradle testDebugUnitTest lintDebug assembleDebug
+gradle assembleRelease
+python3 tools/build_database.py
+```
