@@ -140,7 +140,7 @@ class UnifiedRetriever @Inject constructor(
             }.take(topK)
         } else emptyList()
 
-        // ── Accessories ────────────────────────────────────────────────────────────────────
+        // ── Accessories (умный поиск + совместимость) ────────────────────────────────
         val accessories = run {
             val searchWords = extractAccessorySearchWords(query)
             val allAcc = accessoryDao.getAll()
@@ -162,7 +162,11 @@ class UnifiedRetriever @Inject constructor(
                     if (selectedModel != null) isAccessoryCompatible(acc, selectedModel)
                     else true
                 }
-                .map { ScoredAccessory(it, scorer.scoreAccessory(query, it)) }
+                .map { acc ->
+                    val base = scorer.scoreAccessory(query, acc)
+                    val weighted = scoreAccessoryWeighted(query, acc, searchWords, selectedModel)
+                    ScoredAccessory(acc, base + weighted)
+                }
                 .sortedByDescending { it.score }
                 .filter { it.score >= 0f }
                 .take(topK)
@@ -200,9 +204,73 @@ class UnifiedRetriever @Inject constructor(
     private fun isAccessoryCompatible(acc: Accessory, model: BrpModel): Boolean {
         val platformOk = !model.platform.isNullOrBlank() &&
             acc.compatiblePlatforms?.contains(model.platform, ignoreCase = true) == true
-        val brandOk = acc.brand.contains(model.brand, ignoreCase = true)
         val modelIdOk = acc.compatibleModels?.contains(model.id, ignoreCase = true) == true
-        return platformOk || modelIdOk || brandOk
+        val brandOk =
+            acc.brand.contains(model.brand, ignoreCase = true) ||
+            model.brand.contains(acc.brand, ignoreCase = true) ||
+            (model.brand.startsWith("can-am", ignoreCase = true) && acc.brand.equals("can-am", ignoreCase = true)) ||
+            (model.brand.startsWith("sea-doo", ignoreCase = true) && acc.brand.equals("sea-doo", ignoreCase = true)) ||
+            (model.brand.startsWith("ski-doo", ignoreCase = true) && acc.brand.equals("ski-doo", ignoreCase = true)) ||
+            (model.brand.startsWith("lynx", ignoreCase = true) && acc.brand.equals("lynx", ignoreCase = true))
+        val categoryOk =
+            acc.category.equals(model.category, ignoreCase = true) ||
+            acc.category.equals("all", ignoreCase = true) ||
+            (model.category.equals("atv", ignoreCase = true) && acc.category in listOf("atv", "all", "storage")) ||
+            (model.category.equals("ssv", ignoreCase = true) && acc.category in listOf("ssv", "all", "storage")) ||
+            acc.category.equals("storage", ignoreCase = true) && model.category in listOf("atv", "ssv")
+        val hasSpecificFitment =
+            !(acc.compatiblePlatforms.isNullOrBlank() || acc.compatiblePlatforms == "[]") ||
+            !(acc.compatibleModels.isNullOrBlank() || acc.compatibleModels == "[]")
+        return platformOk || modelIdOk || (brandOk && (categoryOk || !hasSpecificFitment)) || (brandOk && acc.category == "storage")
+    }
+
+    private fun scoreAccessoryWeighted(
+        query: String,
+        acc: Accessory,
+        searchWords: List<String>,
+        model: BrpModel?
+    ): Float {
+        val q = query.lowercase()
+        val text = "${acc.name} ${acc.description} ${acc.sku} ${acc.tags} ${acc.category} ${acc.subcategory}".lowercase()
+        var s = 0f
+        val isGunQuery = listOf("руж", "оруж", "винтовк", "карабин", "охот", "gun", "стрел").any { q.contains(it) }
+        val isFoodQuery = listOf("ед", "еда", "продукт", "холод", "напитк", "термос", "пищ", "куша", "пить", "вода", "пикник").any { q.contains(it) }
+        val isCargoQuery = listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк", "багажник").any { q.contains(it) }
+
+        if (isGunQuery) {
+            if ("gun case" in text) s += 100f
+            if ("gun boot" in text) s += 95f
+            if (text.contains("gun")) s += 80f
+            if (text.contains("руж")) s += 80f
+            if ("case" in text && "gun" in text) s += 50f
+            if ("holder" in text && "gun" in text) s += 60f
+            if ("mount" in text && "gun" in text) s += 55f
+            if (text.contains("kolpin")) s += 20f
+            if (text.contains("spring") && !text.contains("gun")) s -= 50f
+        }
+        if (isFoodQuery) {
+            if (text.contains("cooler")) s += 100f
+            if (text.contains("холодильник")) s += 100f
+            if (text.contains("cooler") && text.contains("linq")) s += 20f
+            if (text.contains("термо")) s += 40f
+            if (text.contains("bag") && (text.contains("storage") || text.contains("linq"))) s += 30f
+            if (text.contains("box") && text.contains("cargo")) s += 30f
+            if (text.contains("trunk")) s += 25f
+            if (text.contains("roll-top")) s += 20f
+            if (text.contains("sport bag")) s += 35f
+        }
+        if (isCargoQuery) {
+            if (text.contains("box")) s += 30f
+            if (text.contains("trunk")) s += 30f
+            if (text.contains("cargo")) s += 30f
+            if (text.contains("linq")) s += 15f
+        }
+        if (model != null) {
+            if (acc.brand.equals(model.brand, ignoreCase = true) || model.brand.contains(acc.brand, ignoreCase = true)) s += 10f
+            if (acc.category.equals(model.category, ignoreCase = true)) s += 5f
+        }
+        if (acc.isNew2026 == 1) s += 2f
+        return s
     }
 
     private fun extractAccessorySearchWords(query: String): List<String> {

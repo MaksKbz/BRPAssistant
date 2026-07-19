@@ -1,7 +1,6 @@
 package com.brp.assistant.ui.model
 
 import android.net.Uri
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,7 +30,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -78,14 +78,12 @@ fun ModelManagerScreen(
     onUpdateModel: (String) -> Unit,
     onUpdateSystemPrompt: (String) -> Unit,
     onUpdateTemperature: (Float) -> Unit,
+    onConfirmUnsafeDownload: () -> Unit,
+    onDismissPendingWarning: () -> Unit,
     onClearError: () -> Unit,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit
 ) {
-    // FIX #1: исправлена опечатка grokApiKey → groqApiKey.
-    // Прежнее написание (без 'q') не компилировалось бы при строгой
-    // типизации, либо ссылалось на несуществующее поле и возвращало null,
-    // из-за чего поле API-ключа всегда оставалось пустым при смене провайдера.
     var apiKeyInput by remember(state.aiProvider) {
         mutableStateOf(if (state.aiProvider == "Gemini") state.geminiApiKey ?: "" else state.groqApiKey ?: "")
     }
@@ -107,6 +105,24 @@ fun ModelManagerScreen(
     val geminiModels = listOf("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro")
     val groqModels = listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768")
     val currentModels = if (state.aiProvider == "Gemini") geminiModels else groqModels
+
+    if (state.pendingWarning != null) {
+        AlertDialog(
+            onDismissRequest = onDismissPendingWarning,
+            title = { Text("Предупреждение о памяти") },
+            text = { Text(state.pendingWarning) },
+            confirmButton = {
+                Button(onClick = onConfirmUnsafeDownload) {
+                    Text("Скачать всё равно")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissPendingWarning) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {

@@ -19,13 +19,16 @@ import javax.inject.Inject
  */
 private fun isSimpleQuestion(message: String): Boolean {
     val lower = message.trim().lowercase()
-    if (lower.length > 60) return false
+    val accessoryKeywords = listOf("аксессуар", "кофр", "багаж", "сумк", "руж", "оруж", "ед", "еда", "холод", "cooler", "gun", "перевоз", "груз", "кронштейн", "креплен")
+    if (accessoryKeywords.any { lower.contains(it) }) return false
+    if (lower.length > 80) return false
     val triggers = listOf(
-        "привет", "здравств", "хай", "hello", "hi", "помоги", "можешь помочь",
+        "привет", "здравств", "хай", "hello", "hi",
         "кто ты", "что ты умеешь", "что ты можешь", "как тебя зовут",
-        "телефон", "контакт", "адрес", "как связаться", "дилер",
+        "телефон", "контакт", "адрес", "как связаться",
         "спасибо", "благодар", "ок", "понятно", "отлично", "хорошо"
     )
+    if (lower.contains("помоги") && lower.length < 25) return true
     return triggers.any { lower.contains(it) }
 }
 

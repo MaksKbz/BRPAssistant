@@ -127,6 +127,16 @@ class RelevanceScorer @Inject constructor() {
             ) score += 20f
         }
 
+        val combined = "${accessory.name} ${accessory.description} ${accessory.tags}".lowercase()
+        if (listOf("руж", "оруж", "винтовк", "охот", "gun").any { q.contains(it) }) {
+            if (combined.contains("gun")) score += 30f
+            if (combined.contains("case") && combined.contains("gun")) score += 20f
+        }
+        if (listOf("еда", "ед", "продукт", "холод", "пикник", "cooler").any { q.contains(it) }) {
+            if (combined.contains("cooler")) score += 35f
+            if (combined.contains("bag") || combined.contains("box") || combined.contains("сумка") || combined.contains("кофр")) score += 10f
+        }
+
         if (accessory.isNew2026 == 1) score += 3f
         return score
     }

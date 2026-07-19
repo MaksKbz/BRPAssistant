@@ -99,8 +99,7 @@ private fun OnboardingStep1(onNext: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-            text = "Диагностика, советы, регламент — всё в одном приложении.
-Работает с локальными и онлайн AI-моделями.",
+            text = "Диагностика, советы, регламент — всё в одном приложении.\nРаботает с локальными и онлайн AI-моделями.",
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
