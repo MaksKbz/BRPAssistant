@@ -57,14 +57,10 @@ class UserDocumentsRepository @Inject constructor(
                 )
 
                 val chunks = chunkText(content, doc.id, fileName)
-                val docWithChunkCount = doc.copy(chunkCount = chunks.size)
-                dao.insert(docWithChunkCount)
-                if (chunks.isNotEmpty()) {
-                    dao.insertChunks(chunks)
-                }
+                dao.insertDocumentWithChunks(doc, chunks)
 
                 Log.i(TAG, "Added user doc '${doc.displayName}': ${chunks.size} chunks")
-                docWithChunkCount
+                doc.copy(chunkCount = chunks.size)
             }
         }
 
@@ -81,10 +77,8 @@ class UserDocumentsRepository @Inject constructor(
                     addedAt = System.currentTimeMillis()
                 )
                 val chunks = chunkText(text, doc.id, displayName)
-                val docWithChunkCount = doc.copy(chunkCount = chunks.size)
-                dao.insert(docWithChunkCount)
-                if (chunks.isNotEmpty()) dao.insertChunks(chunks)
-                docWithChunkCount
+                dao.insertDocumentWithChunks(doc, chunks)
+                doc.copy(chunkCount = chunks.size)
             }
         }
 

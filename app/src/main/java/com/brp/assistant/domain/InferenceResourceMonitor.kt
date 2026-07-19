@@ -23,7 +23,8 @@ import javax.inject.Singleton
  * @param batteryLevel       Уровень заряда 0-100 (-1 если недоступен).
  * @param isBatterySaverOn   Включён ли режим экономии батареи.
  * @param batteryWarning     Предупреждение о низком заряде (или null).
- * @param recommendedMaxTokens Рекомендуемое maxTokens с учётом состояния.
+ * @param recommendedMaxTokens Информационная рекомендация maxTokens (не применяется к движку напрямую,
+ *  т.к. MediaPipe maxTokens требует переинициализации; оставлено для телеметрии/UI).
  */
 data class ResourceCheckResult(
     val isSafeForGeneration: Boolean,

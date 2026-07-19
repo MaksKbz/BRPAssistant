@@ -289,6 +289,15 @@ interface UserDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChunks(chunks: List<UserDocumentChunk>)
 
+    @Transaction
+    suspend fun insertDocumentWithChunks(
+        document: UserDocument,
+        chunks: List<UserDocumentChunk>
+    ) {
+        insert(document.copy(chunkCount = chunks.size))
+        if (chunks.isNotEmpty()) insertChunks(chunks)
+    }
+
     @Query("""
         SELECT udc.* FROM user_document_chunks udc
         JOIN user_document_chunks_fts fts ON udc.id = fts.id

@@ -158,10 +158,11 @@ class LocalInferenceUseCase @Inject constructor(
             return@withContext Result.failure(Exception(msg))
         }
 
-        // Предупреждение о батарее — показывается в UI перед генерацией
+        // Предупреждение о батарее — логируем, UI может показать отдельно
+        // P1: не отправляем через onPartial, чтобы не повреждать текст ответа LLM
         resourceCheck.batteryWarning?.let { warning ->
             Log.d(TAG, "Battery warning: $warning")
-            withContext(Dispatchers.Main) { onPartial("$warning\n\n") }
+            // UI warning должен показываться отдельным состоянием, а не токеном стрима
         }
 
         Log.d(TAG, "Sending prompt (${prompt.length} chars) to local model")
