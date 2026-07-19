@@ -1,6 +1,7 @@
 package com.brp.assistant
 
 import com.brp.assistant.data.llm.CircuitBreaker
+import com.brp.assistant.data.llm.CircuitOpenException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Before
@@ -12,35 +13,47 @@ class CircuitBreakerTest {
 
     @Before
     fun setUp() {
-        // openDurationMs = 0 чтобы тест не ждал 30 секунд
-        breaker = CircuitBreaker(failureThreshold = 3, openDurationMs = 0)
+        breaker = CircuitBreaker(failureThreshold = 3, resetTimeoutMs = 0)
     }
 
     @Test
-    fun `closed by default — calls pass through`() = runTest {
-        assertTrue(breaker.isAllowed())
+    fun `closed by default — call succeeds`() = runTest {
+        val result = breaker.call("test") { "ok" }
+        assertEquals("ok", result)
     }
 
     @Test
     fun `opens after threshold failures`() = runTest {
-        repeat(3) { breaker.recordFailure() }
-        assertFalse(breaker.isAllowed())
+        repeat(3) {
+            try { breaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
+        }
+        try {
+            breaker.call("test") { "should not" }
+            fail("Should have thrown CircuitOpenException")
+        } catch (e: CircuitOpenException) {
+            assertTrue(e.message!!.contains("OPEN"))
+        }
     }
 
     @Test
     fun `resets to closed after open duration expires`() = runTest {
-        repeat(3) { breaker.recordFailure() }
-        // openDurationMs = 0 → должен сразу перейти в half-open
-        assertTrue(breaker.isAllowed())
+        repeat(3) {
+            try { breaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
+        }
+        val result = breaker.call("test") { "recovered" }
+        assertEquals("recovered", result)
     }
 
     @Test
     fun `recordSuccess resets failure count`() = runTest {
-        repeat(2) { breaker.recordFailure() }
-        breaker.recordSuccess()
-        assertTrue(breaker.isAllowed())
-        // После success счётчик сброшен — нужно снова 3 ошибки
-        repeat(2) { breaker.recordFailure() }
-        assertTrue(breaker.isAllowed())
+        repeat(2) {
+            try { breaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
+        }
+        breaker.call("test") { "ok" }
+        repeat(2) {
+            try { breaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
+        }
+        val result = breaker.call("test") { "still ok" }
+        assertEquals("still ok", result)
     }
 }

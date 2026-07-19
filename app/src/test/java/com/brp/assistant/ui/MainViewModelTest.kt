@@ -5,6 +5,7 @@ import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.repository.ModelRepository
 import com.brp.assistant.data.repository.SettingsRepository
 import com.brp.assistant.domain.AppHealthChecker
+import com.brp.assistant.domain.DeviceCapabilityProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -19,12 +20,6 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
-/**
- * C1 — Unit-тесты для MainViewModel.
- *
- * Проверяем что selectVehicle(id, name) и selectVehicle(BrpModel)
- * реально записывают в SettingsRepository, а не только обновляют StateFlow.
- */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModelTest {
 
@@ -34,6 +29,7 @@ class MainViewModelTest {
     private lateinit var modelRepo: ModelRepository
     private lateinit var llmEngine: LlmInferenceEngine
     private lateinit var healthChecker: AppHealthChecker
+    private lateinit var deviceCapabilityProvider: DeviceCapabilityProvider
     private lateinit var viewModel: MainViewModel
 
     private val vehicleIdFlow = MutableStateFlow<String?>(null)
@@ -46,20 +42,26 @@ class MainViewModelTest {
         modelRepo     = mockk(relaxed = true)
         llmEngine     = mockk(relaxed = true)
         healthChecker = mockk(relaxed = true)
+        deviceCapabilityProvider = mockk(relaxed = true)
 
         every { settingsRepo.selectedVehicleId } returns vehicleIdFlow
-        every { settingsRepo.appTheme }          returns flowOf("System")
-        every { llmEngine.activeModelId }        returns flowOf(null)
-        every { healthChecker.status }           returns flowOf(mockk(relaxed = true) {
+        every { settingsRepo.appTheme } returns flowOf("System")
+        every { settingsRepo.onboardingCompleted } returns flowOf(true)
+        every { settingsRepo.selectedVehicleName } returns flowOf(null)
+        every { llmEngine.activeModelId } returns flowOf(null)
+        every { healthChecker.status } returns flowOf(mockk(relaxed = true) {
             every { isLowDisk } returns false
-            every { isDbError }  returns false
+            every { isDbError } returns false
         })
+        every { deviceCapabilityProvider.formatDeviceInfo() } returns "Test Device"
+        every { deviceCapabilityProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
 
         viewModel = MainViewModel(
-            modelRepository     = modelRepo,
-            llmEngine           = llmEngine,
-            settingsRepository  = settingsRepo,
-            healthChecker       = healthChecker
+            modelRepository = modelRepo,
+            llmEngine = llmEngine,
+            settingsRepository = settingsRepo,
+            healthChecker = healthChecker,
+            deviceCapabilityProvider = deviceCapabilityProvider
         )
     }
 
@@ -71,7 +73,7 @@ class MainViewModelTest {
     @Test
     fun `selectVehicle(BrpModel) persists id to SettingsRepository`() = runTest {
         val model = BrpModel(id = "can-am-1", brand = "Can-Am", modelName = "Maverick R",
-            category = "SxS", subcategory = null, year = 2024)
+            category = "SxS", subcategory = null, modelYear = 2024)
 
         viewModel.selectVehicle(model)
         advanceUntilIdle()
@@ -104,11 +106,9 @@ class MainViewModelTest {
     fun `selectVehicle(id, name) does not crash when ModelRepository throws`() = runTest {
         coEvery { modelRepo.getById(any()) } throws RuntimeException("DB error")
 
-        // Не должно пробрасывать исключение наружу
         viewModel.selectVehicle("bad-id", "Unknown")
         advanceUntilIdle()
 
-        // settingsRepo всё равно должен был быть вызван до ошибки repo
         coVerify(exactly = 1) { settingsRepo.setSelectedVehicleId("bad-id") }
     }
 
