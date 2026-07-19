@@ -49,7 +49,7 @@ class MainViewModelTest {
         every { settingsRepo.appTheme } returns flowOf("System")
         every { settingsRepo.onboardingCompleted } returns flowOf(true)
         every { settingsRepo.selectedVehicleName } returns flowOf<String?>(null)
-        every { llmEngine.activeModelId } returns flowOf(null)
+        every { llmEngine.activeModelId } returns flowOf<String?>(null)
         every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         every { deviceCapabilityProvider.formatDeviceInfo() } returns "Test Device"
         every { deviceCapabilityProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
@@ -70,7 +70,15 @@ class MainViewModelTest {
 
     @Test
     fun `selectVehicle(BrpModel) persists id to SettingsRepository`() = runTest {
-        val model = BrpModel(id = "can-am-1", brand = "Can-Am", modelName = "Maverick R", category = "SxS", subcategory = null, modelYear = 2024, isElectric = 0)
+        val model = BrpModel(
+            id = "can-am-1",
+            brand = "Can-Am",
+            modelName = "Maverick R",
+            category = "SxS",
+            subcategory = null,
+            modelYear = 2024,
+            isElectric = 0
+        )
 
         viewModel.selectVehicle(model)
         advanceUntilIdle()

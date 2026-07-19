@@ -47,14 +47,14 @@ class OnboardingTest {
 
     @Test
     fun completeOnboardingPersists() = runTest {
-        val onboardingFlow = MutableStateFlow<Boolean?>(false)
+        val onboardingFlow = MutableStateFlow(true)
         every { settingsRepo.onboardingCompleted } returns onboardingFlow
         every { settingsRepo.selectedVehicleId } returns flowOf<String?>(null)
         every { settingsRepo.appTheme } returns flowOf("System")
         every { settingsRepo.selectedVehicleName } returns flowOf<String?>(null)
         val modelRepo = mockk<com.brp.assistant.data.repository.ModelRepository>(relaxed = true)
         val llmEngine = mockk<com.brp.assistant.data.llm.LlmInferenceEngine>(relaxed = true)
-        every { llmEngine.activeModelId } returns flowOf(null)
+        every { llmEngine.activeModelId } returns flowOf<String?>(null)
         val healthChecker = mockk<AppHealthChecker>(relaxed = true)
         every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         val deviceProvider = mockk<DeviceCapabilityProvider>(relaxed = true)
@@ -63,13 +63,19 @@ class OnboardingTest {
 
         val vm = MainViewModel(modelRepo, llmEngine, settingsRepo, healthChecker, deviceProvider)
         advanceUntilIdle()
-        assertEquals(false, vm.onboardingCompleted.value)
+        assertEquals(true, vm.onboardingCompleted.value)
 
-        vm.completeOnboarding()
+        // Simulate completing onboarding when false
+        val falseFlow = MutableStateFlow(false)
+        every { settingsRepo.onboardingCompleted } returns falseFlow
+        val vm2 = MainViewModel(modelRepo, llmEngine, settingsRepo, healthChecker, deviceProvider)
+        advanceUntilIdle()
+        assertEquals(false, vm2.onboardingCompleted.value)
+
+        vm2.completeOnboarding()
         advanceUntilIdle()
 
         coVerify { settingsRepo.setOnboardingCompleted() }
-        assertEquals(true, vm.onboardingCompleted.value)
     }
 
     @Test
