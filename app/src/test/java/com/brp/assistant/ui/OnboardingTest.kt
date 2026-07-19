@@ -1,5 +1,6 @@
 package com.brp.assistant.ui
 
+import android.util.Log
 import com.brp.assistant.data.repository.SettingsRepository
 import com.brp.assistant.domain.AppHealthChecker
 import com.brp.assistant.domain.DeviceCapabilityProvider
@@ -7,6 +8,7 @@ import com.brp.assistant.domain.HealthStatus
 import io.mockk.every
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +27,11 @@ class OnboardingTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        mockkStatic(Log::class)
+        every { Log.d(any(), any<String>()) } returns 0
+        every { Log.i(any(), any<String>()) } returns 0
+        every { Log.e(any(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any<String>()) } returns 0
         settingsRepo = mockk(relaxed = true)
     }
 

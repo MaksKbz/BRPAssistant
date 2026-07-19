@@ -1,7 +1,10 @@
 package com.brp.assistant
 
+import android.util.Log
 import com.brp.assistant.data.llm.CircuitBreaker
 import com.brp.assistant.data.llm.CircuitOpenException
+import io.mockk.every
+import io.mockk.mockkStatic
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Before
@@ -13,6 +16,10 @@ class CircuitBreakerTest {
 
     @Before
     fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.i(any(), any<String>()) } returns 0
+        every { Log.w(any(), any<String>()) } returns 0
+        every { Log.d(any(), any<String>()) } returns 0
         breaker = CircuitBreaker(failureThreshold = 3, resetTimeoutMs = 0)
     }
 

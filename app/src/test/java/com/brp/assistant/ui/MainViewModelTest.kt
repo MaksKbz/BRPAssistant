@@ -1,5 +1,6 @@
 package com.brp.assistant.ui
 
+import android.util.Log
 import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.llm.LlmInferenceEngine
 import com.brp.assistant.data.repository.ModelRepository
@@ -11,6 +12,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +39,11 @@ class MainViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        mockkStatic(Log::class)
+        every { Log.d(any(), any<String>()) } returns 0
+        every { Log.i(any(), any<String>()) } returns 0
+        every { Log.e(any(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any<String>()) } returns 0
 
         settingsRepo = mockk(relaxed = true)
         modelRepo = mockk(relaxed = true)
