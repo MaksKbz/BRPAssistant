@@ -6,37 +6,72 @@ enum class AccessoryIntent {
 
 object AccessoryIntentDetector {
 
+    private fun tokenize(query: String): List<String> {
+        return query.lowercase()
+            .split(Regex("[^a-zа-яё0-9]+"))
+            .filter { it.length >= 2 }
+    }
+
+    private fun anyWordStartsWith(tokens: List<String>, prefixes: List<String>): Boolean {
+        return tokens.any { token ->
+            prefixes.any { pref -> token.startsWith(pref) }
+        }
+    }
+
+    private fun anyWordEquals(tokens: List<String>, words: List<String>): Boolean {
+        return tokens.any { it in words }
+    }
+
     fun detectIntents(query: String): Set<AccessoryIntent> {
+        val tokens = tokenize(query)
         val q = query.lowercase()
         val intents = mutableSetOf<AccessoryIntent>()
-        if (listOf("руж", "оруж", "винтовк", "карабин", "охот", "gun", "стрел").any { q.contains(it) }) {
+
+        // GUN: руж, оруж, винтовк, карабин, охот, gun, стрел
+        if (anyWordStartsWith(tokens, listOf("руж", "оруж", "винтовк", "карабин", "охот", "gun", "стрел")) ||
+            anyWordEquals(tokens, listOf("gun", "rifle"))) {
             intents.add(AccessoryIntent.GUN)
         }
-        if (listOf("еда", "еду", "пища", "продукт", "напит", "холодильник", "cooler", "пикник", "термос", "холод").any { q.contains(it) }) {
+
+        // FOOD: еда, еду, пища, продукт, напит, холодильник, cooler, пикник, термос, холод
+        // Используем startsWith чтобы избежать "передача" -> "еда" и "редуктор" -> "еду"
+        if (anyWordStartsWith(tokens, listOf("еда", "еду", "еды", "едой", "пища", "пищ", "продукт", "напит", "холодильник", "холод", "термос", "cooler", "пикник")) ) {
             intents.add(AccessoryIntent.FOOD)
         }
-        if (listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк", "багажник", "cargo", "box", "trunk", "storage", "linq").any { q.contains(it) }) {
+
+        // CARGO: кофр, багаж, ящик, перевоз, груз, вещ, класть, сумк, багажник, cargo, box, trunk, storage, linq
+        if (anyWordStartsWith(tokens, listOf("кофр", "багаж", "ящик", "перевоз", "груз", "вещ", "класть", "сумк", "багажник", "cargo", "trunk", "storage", "linq")) ||
+            anyWordEquals(tokens, listOf("box"))) {
+            // box как отдельное слово, чтобы не матчить "toolbox" случайно, но storage/box часто отдельно
             intents.add(AccessoryIntent.CARGO)
         }
-        if (listOf("лебедк", "winch", "трос").any { q.contains(it) }) {
+        // Отдельно box как startsWith тоже, но проверяем токен "box" точно
+        if (tokens.any { it == "box" || it.startsWith("box") }) {
+            // box часто встречается как "toolbox" - но в контексте BRP это cargo, оставим
+            if (!intents.contains(AccessoryIntent.FOOD)) {
+                // не добавляем cargo если уже food? на самом деле можно оба
+            }
+        }
+
+        if (anyWordStartsWith(tokens, listOf("лебедк", "winch", "трос"))) {
             intents.add(AccessoryIntent.WINCH)
         }
-        if (listOf("свет", "фар", "led", "люстр", "фара", "light").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("свет", "фар", "led", "люстр", "фара", "light"))) {
             intents.add(AccessoryIntent.LIGHT)
         }
-        if (listOf("подогрев", "heated", "grips").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("подогрев", "heated", "grips"))) {
             intents.add(AccessoryIntent.HEATING)
         }
-        if (listOf("крыш", "козырёк", "козырек", "тент", "roof").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("крыш", "козырёк", "козырек", "тент", "roof"))) {
             intents.add(AccessoryIntent.ROOF)
         }
-        if (listOf("двер", "кабин", "doors", "cab").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("двер", "кабин", "doors", "cab"))) {
             intents.add(AccessoryIntent.DOORS)
         }
-        if (listOf("зеркал", "mirror").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("зеркал", "mirror"))) {
             intents.add(AccessoryIntent.MIRROR)
         }
-        if (listOf("музык", "звук", "аудио", "динамик", "колонк", "audio", "soundbar", "bluetooth").any { q.contains(it) }) {
+        if (anyWordStartsWith(tokens, listOf("музык", "звук", "аудио", "динамик", "колонк", "audio", "soundbar", "bluetooth"))) {
             intents.add(AccessoryIntent.AUDIO)
         }
         if (intents.isEmpty()) intents.add(AccessoryIntent.OTHER)
@@ -47,11 +82,8 @@ object AccessoryIntentDetector {
     fun isGunQuery(query: String): Boolean = detectIntents(query).contains(AccessoryIntent.GUN)
     fun isCargoQuery(query: String): Boolean = detectIntents(query).contains(AccessoryIntent.CARGO)
 
-    // For regression: ensure "редуктор" is NOT detected as FOOD
     fun isFalseFoodTrigger(query: String): Boolean {
         val q = query.lowercase()
-        // old buggy trigger "ед" would match "редуктор"
-        // new implementation must NOT
         return q.contains("редуктор") && isFoodQuery(query)
     }
 }
