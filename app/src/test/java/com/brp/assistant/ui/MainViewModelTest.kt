@@ -6,6 +6,7 @@ import com.brp.assistant.data.repository.ModelRepository
 import com.brp.assistant.data.repository.SettingsRepository
 import com.brp.assistant.domain.AppHealthChecker
 import com.brp.assistant.domain.DeviceCapabilityProvider
+import com.brp.assistant.domain.HealthStatus
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -38,21 +39,18 @@ class MainViewModelTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
 
-        settingsRepo  = mockk(relaxed = true)
-        modelRepo     = mockk(relaxed = true)
-        llmEngine     = mockk(relaxed = true)
+        settingsRepo = mockk(relaxed = true)
+        modelRepo = mockk(relaxed = true)
+        llmEngine = mockk(relaxed = true)
         healthChecker = mockk(relaxed = true)
         deviceCapabilityProvider = mockk(relaxed = true)
 
         every { settingsRepo.selectedVehicleId } returns vehicleIdFlow
         every { settingsRepo.appTheme } returns flowOf("System")
         every { settingsRepo.onboardingCompleted } returns flowOf(true)
-        every { settingsRepo.selectedVehicleName } returns flowOf(null)
+        every { settingsRepo.selectedVehicleName } returns flowOf<String?>(null)
         every { llmEngine.activeModelId } returns flowOf(null)
-        every { healthChecker.status } returns flowOf(mockk(relaxed = true) {
-            every { isLowDisk } returns false
-            every { isDbError } returns false
-        })
+        every { healthChecker.status } returns flowOf(HealthStatus(isLowDisk = false, isDbError = false))
         every { deviceCapabilityProvider.formatDeviceInfo() } returns "Test Device"
         every { deviceCapabilityProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
 
@@ -72,8 +70,7 @@ class MainViewModelTest {
 
     @Test
     fun `selectVehicle(BrpModel) persists id to SettingsRepository`() = runTest {
-        val model = BrpModel(id = "can-am-1", brand = "Can-Am", modelName = "Maverick R",
-            category = "SxS", subcategory = null, modelYear = 2024)
+        val model = BrpModel(id = "can-am-1", brand = "Can-Am", modelName = "Maverick R", category = "SxS", subcategory = null, modelYear = 2024)
 
         viewModel.selectVehicle(model)
         advanceUntilIdle()

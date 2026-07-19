@@ -1,9 +1,11 @@
 package com.brp.assistant.ui
 
 import com.brp.assistant.data.repository.SettingsRepository
-import io.mockk.coEvery
-import io.mockk.coVerify
+import com.brp.assistant.domain.AppHealthChecker
+import com.brp.assistant.domain.DeviceCapabilityProvider
+import com.brp.assistant.domain.HealthStatus
 import io.mockk.every
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -34,14 +36,11 @@ class OnboardingTest {
 
     @Test
     fun onboardingDefaultFalse() = runTest {
-        // SettingsRepository.onboardingCompleted default is false in DataStore
-        // We simulate Flow<Boolean> returning false initially
         val flow = MutableStateFlow(false)
         every { settingsRepo.onboardingCompleted } returns flow
 
         assertFalse(flow.value)
 
-        // After setter true
         flow.value = true
         assertTrue(flow.value)
     }
@@ -50,18 +49,19 @@ class OnboardingTest {
     fun completeOnboardingPersists() = runTest {
         val onboardingFlow = MutableStateFlow<Boolean?>(false)
         every { settingsRepo.onboardingCompleted } returns onboardingFlow
-        every { settingsRepo.selectedVehicleId } returns flowOf(null)
+        every { settingsRepo.selectedVehicleId } returns flowOf<String?>(null)
         every { settingsRepo.appTheme } returns flowOf("System")
+        every { settingsRepo.selectedVehicleName } returns flowOf<String?>(null)
         val modelRepo = mockk<com.brp.assistant.data.repository.ModelRepository>(relaxed = true)
         val llmEngine = mockk<com.brp.assistant.data.llm.LlmInferenceEngine>(relaxed = true)
         every { llmEngine.activeModelId } returns flowOf(null)
-        val healthChecker = mockk<com.brp.assistant.domain.AppHealthChecker>(relaxed = true)
-        every { healthChecker.status } returns flowOf(mockk(relaxed = true) {
-            every { isLowDisk } returns false
-            every { isDbError } returns false
-        })
+        val healthChecker = mockk<AppHealthChecker>(relaxed = true)
+        every { healthChecker.status } returns flowOf(HealthStatus(isLowDisk = false, isDbError = false))
+        val deviceProvider = mockk<DeviceCapabilityProvider>(relaxed = true)
+        every { deviceProvider.formatDeviceInfo() } returns "Test Device"
+        every { deviceProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
 
-        val vm = MainViewModel(modelRepo, llmEngine, settingsRepo, healthChecker)
+        val vm = MainViewModel(modelRepo, llmEngine, settingsRepo, healthChecker, deviceProvider)
         advanceUntilIdle()
         assertEquals(false, vm.onboardingCompleted.value)
 
@@ -74,13 +74,10 @@ class OnboardingTest {
 
     @Test
     fun nullLoadingDoesNotShowHome() = runTest {
-        // When onboardingCompleted is null (loading), UI should show loading, not Home
         val flow = MutableStateFlow<Boolean?>(null)
         assertNull(flow.value)
-        // Home should not be shown when null
         val shouldShowHome = flow.value == true
         assertFalse(shouldShowHome)
-        // Only when true
         flow.value = true
         assertTrue(flow.value == true)
     }

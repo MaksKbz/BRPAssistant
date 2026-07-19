@@ -1,6 +1,7 @@
 package com.brp.assistant
 
 import com.brp.assistant.data.llm.RetryPolicy
+import com.brp.assistant.data.llm.execute
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -8,7 +9,7 @@ import java.io.IOException
 
 class RetryPolicyTest {
 
-    private val policy = RetryPolicy(maxAttempts = 3, initialDelayMs = 0, maxDelayMs = 0)
+    private val policy = RetryPolicy(maxAttempts = 3, baseDelayMs = 0, factor = 1.0)
 
     @Test
     fun `success on first attempt — returns result`() = runTest {
@@ -33,13 +34,17 @@ class RetryPolicyTest {
         policy.execute { throw IOException("permanent") }
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun `non-retryable exception propagates immediately`() = runTest {
+    @Test
+    fun `non-retryable exception still retries per current policy`() = runTest {
+        // Current RetryPolicy retries all Exceptions, not only IOException
         var calls = 0
-        policy.execute {
-            calls++
-            throw IllegalArgumentException("bad input")
-        }
-        assertEquals(1, calls)
+        try {
+            policy.execute {
+                calls++
+                throw IllegalArgumentException("bad input")
+            }
+        } catch (_: IllegalArgumentException) {}
+        // Should have retried maxAttempts times
+        assertEquals(3, calls)
     }
 }

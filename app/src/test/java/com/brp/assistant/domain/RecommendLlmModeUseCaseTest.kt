@@ -1,6 +1,8 @@
 package com.brp.assistant.domain
 
 import com.brp.assistant.data.llm.OfflineModelInfo
+import com.brp.assistant.data.llm.ModelFormat
+import com.brp.assistant.data.llm.PromptStyle
 import com.brp.assistant.domain.usecase.RecommendLlmModeUseCase
 import io.mockk.every
 import io.mockk.mockk
@@ -12,14 +14,18 @@ class RecommendLlmModeUseCaseTest {
     private val deviceProvider = mockk<DeviceCapabilityProvider>()
     private val useCase = RecommendLlmModeUseCase(deviceProvider)
 
-    private fun model(approxMb: Long, title: String = "Test"): OfflineModelInfo {
+    private fun model(approxMb: Int, title: String = "Test"): OfflineModelInfo {
         return OfflineModelInfo(
             id = "test-id",
             title = title,
-            fileName = "test.task",
-            url = "https://example.com/model.task",
+            repoId = "test/repo",
+            filename = "test.task",
+            license = "MIT",
             approxSizeMb = approxMb,
-            promptStyle = com.brp.assistant.data.llm.PromptStyle.CHATML,
+            minRamGb = 4,
+            promptStyle = PromptStyle.CHATML,
+            description = "Test model",
+            format = ModelFormat.TASK,
             isCustom = false
         )
     }

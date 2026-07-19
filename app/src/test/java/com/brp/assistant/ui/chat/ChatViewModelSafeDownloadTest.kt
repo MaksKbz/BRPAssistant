@@ -1,9 +1,10 @@
 package com.brp.assistant.ui.chat
 
 import com.brp.assistant.data.llm.OfflineModelInfo
+import com.brp.assistant.data.llm.ModelFormat
+import com.brp.assistant.data.llm.PromptStyle
 import com.brp.assistant.domain.usecase.ModelRecommendation
 import com.brp.assistant.domain.usecase.RecommendLlmModeUseCase
-import com.brp.assistant.data.llm.PromptStyle
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.*
@@ -14,10 +15,14 @@ class ChatViewModelSafeDownloadTest {
     private fun model(): OfflineModelInfo = OfflineModelInfo(
         id = "test",
         title = "Heavy Model",
-        fileName = "heavy.task",
-        url = "https://example.com",
+        repoId = "test/repo",
+        filename = "heavy.task",
+        license = "MIT",
         approxSizeMb = 4000,
-        promptStyle = PromptStyle.CHATML
+        minRamGb = 8,
+        promptStyle = PromptStyle.CHATML,
+        description = "Heavy",
+        format = ModelFormat.TASK
     )
 
     @Test
@@ -28,7 +33,6 @@ class ChatViewModelSafeDownloadTest {
         val rec = provider.evaluate(model())
         assertTrue(rec.isSafe)
         assertNull(rec.warningMessage)
-        // Should start download immediately, no pending warning
     }
 
     @Test
@@ -39,17 +43,14 @@ class ChatViewModelSafeDownloadTest {
         val rec = provider.evaluate(model())
         assertFalse(rec.isSafe)
         assertNotNull(rec.warningMessage)
-        // Chat should set pendingDownloadWarning and not start download
     }
 
     @Test
     fun confirmStartsOneDownload() {
-        // Simulate confirm logic: pending cleared and download started once
         var downloadCount = 0
         fun startDownload() { downloadCount++ }
 
         var pending: OfflineModelInfo? = model()
-        // confirm
         pending?.let {
             pending = null
             startDownload()
@@ -62,10 +63,7 @@ class ChatViewModelSafeDownloadTest {
     fun dismissDoesNotStartDownload() {
         var downloadCount = 0
         var pending: OfflineModelInfo? = model()
-
-        // dismiss
         pending = null
-        // no download
         assertEquals(0, downloadCount)
         assertNull(pending)
     }

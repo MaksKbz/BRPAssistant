@@ -23,7 +23,7 @@ class CleanupWorkerTest {
         val dao = mockk<ChatSessionDao>(relaxed = true)
         val engine = mockk<LlmInferenceEngine>(relaxed = true)
         coEvery { dao.deleteSessionsOlderThan(any()) } returns Unit
-        every { engine.getModelsBaseDir() } returns tempFolder.root.absolutePath
+        every { engine.getModelsBaseDir() } returns tempFolder.root
 
         // Simulate cutoff 90 days
         val cutoff = System.currentTimeMillis() - (90L * 24 * 60 * 60 * 1000L)
@@ -51,7 +51,7 @@ class CleanupWorkerTest {
         }
         val normalFile = File(modelsDir, "model.task").apply { createNewFile() }
 
-        every { engine.getModelsBaseDir() } returns tempFolder.root.absolutePath
+        every { engine.getModelsBaseDir() } returns tempFolder.root
 
         val worker = TestableCleanupWorker(dao, engine, tempFolder.root)
         worker.cleanPartFiles()
