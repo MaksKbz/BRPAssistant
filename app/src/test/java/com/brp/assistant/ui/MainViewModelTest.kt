@@ -74,7 +74,7 @@ class MainViewModelTest {
             brand = "Can-Am",
             modelName = "Maverick R",
             category = "SxS",
-            subcategory = null,
+            subcategory = "utility",
             modelYear = 2024,
             isElectric = 0
         )
