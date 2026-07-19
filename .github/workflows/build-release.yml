@@ -28,9 +28,14 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Gradle
+      - name: Install Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
 
+      # ── Авто-бамп патч-версии ────────────────────────────────────────────
+      # Поднимает versionName (патч) и versionCode на 1,
+      # коммитит в main с [skip ci] — не запускает новую сборку.
       - name: Bump patch version
         id: bump
         run: |
@@ -59,9 +64,7 @@ jobs:
           echo "new_code=$NEW_CODE"    >> $GITHUB_OUTPUT
 
       - name: Build Release APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleRelease --stacktrace --no-daemon
+        run: gradle assembleRelease --stacktrace --no-daemon
 
       - name: List APK outputs
         run: find app/build/outputs/apk -name '*.apk' | xargs ls -lh 2>/dev/null || echo 'No APK found'
@@ -97,6 +100,10 @@ jobs:
           mv app-release-signed.apk \
             BRPAssistant-v${{ steps.bump.outputs.new_version }}.apk
 
+      # ── Публикация ──────────────────────────────────────────────────────
+      # Используем постоянный тег "latest" — в Releases всегда ровно
+      # один APK, актуальный. Имя файла меняется при каждом пуше.
+      # Старые сборки доступны через историю коммитов в main.
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
