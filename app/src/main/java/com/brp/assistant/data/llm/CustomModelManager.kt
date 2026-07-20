@@ -54,7 +54,7 @@ class CustomModelManager @Inject constructor(
         withContext(Dispatchers.IO) {
             // FIX: поддерживаем все форматы, которые умеют движки приложения.
             val lowerName = fileName.lowercase()
-            val supportedExt = listOf(".task", ".tflite", ".litertlm", ".gguf", ".bin")
+            val supportedExt = listOf(".task", ".tflite", ".litertlm")
             val ext = supportedExt.find { lowerName.endsWith(it) }
             if (ext == null) {
                 return@withContext Result.failure(
