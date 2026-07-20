@@ -175,48 +175,87 @@ class LiteRtLmEngine @Inject constructor(
         )
 
         eng.createConversation(convConfig).use { conversation ->
-            // sendMessageAsync(text) возвращает Flow<Message>; текст чанка — toString().
-            // FIX: Qwen3 и подобные модели стримят блок <think>...</think> (рассуждения).
-            // Пользователю их показывать не нужно — фильтруем из вывода.
             var insideThink = false
+            var buffer = ""
             var tokenCount = 0
+            
             conversation.sendMessageAsync(prompt).collect { message ->
-                // Защитный лимит: обрываем генерацию после 1500 токенов.
-                // Даже с SamplerConfig некоторые модели могут зацикливаться.
                 tokenCount++
                 if (tokenCount > 1500) {
                     Log.w(TAG, "Generation stopped: token limit reached (1500)")
                     return@collect
                 }
-                // Проверяем флаг на каждом сообщении — closeInternal() мог быть
-                // вызван уже после старта генерации
                 if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
-                var token = message.toString()
-
-                // Удаляем <think> и </think> теги и всё между ними из стрима.
-                // Т.к. токены приходят по частям, отслеживаем состояние.
-                val sb = StringBuilder()
+                
+                buffer += message.toString()
                 var i = 0
-                while (i < token.length) {
-                    if (!insideThink && token.startsWith("<think>", i)) {
-                        insideThink = true
-                        i += "<think>".length
-                    } else if (insideThink && token.startsWith("</think>", i)) {
-                        insideThink = false
-                        i += "</think>".length
-                    } else if (insideThink) {
-                        i++ // пропускаем символ внутри блока рассуждений
+                val sb = StringBuilder()
+                
+                while (i < buffer.length) {
+                    if (!insideThink) {
+                        val startIdx = buffer.indexOf("<think>", i)
+                        if (startIdx != -1) {
+                            sb.append(buffer.substring(i, startIdx))
+                            insideThink = true
+                            i = startIdx + 7
+                        } else {
+                            // Check if the end of buffer has a prefix of "<think>"
+                            var prefixLen = 0
+                            for (len in 1..6) {
+                                if (buffer.length >= len) {
+                                    val suffix = buffer.substring(buffer.length - len)
+                                    if ("<think>".startsWith(suffix)) {
+                                        prefixLen = len
+                                    }
+                                }
+                            }
+                            if (prefixLen > 0) {
+                                sb.append(buffer.substring(i, buffer.length - prefixLen))
+                                i = buffer.length - prefixLen
+                            } else {
+                                sb.append(buffer.substring(i))
+                                i = buffer.length
+                            }
+                            break
+                        }
                     } else {
-                        sb.append(token[i])
-                        i++
+                        val endIdx = buffer.indexOf("</think>", i)
+                        if (endIdx != -1) {
+                            insideThink = false
+                            i = endIdx + 8
+                        } else {
+                            // Check if the end of buffer has a prefix of "</think>"
+                            var prefixLen = 0
+                            for (len in 1..7) {
+                                if (buffer.length >= len) {
+                                    val suffix = buffer.substring(buffer.length - len)
+                                    if ("</think>".startsWith(suffix)) {
+                                        prefixLen = len
+                                    }
+                                }
+                            }
+                            if (prefixLen > 0) {
+                                i = buffer.length - prefixLen
+                            } else {
+                                i = buffer.length
+                            }
+                            break
+                        }
                     }
                 }
-                token = sb.toString()
+                
+                buffer = buffer.substring(i)
+                val tokenToEmit = sb.toString()
 
-                if (token.isNotEmpty()) {
-                    onPartial(token)
-                    emit(token)
+                if (tokenToEmit.isNotEmpty()) {
+                    onPartial(tokenToEmit)
+                    emit(tokenToEmit)
                 }
+            }
+            
+            if (buffer.isNotEmpty() && !insideThink) {
+                onPartial(buffer)
+                emit(buffer)
             }
         }
     }.flowOn(Dispatchers.IO)
