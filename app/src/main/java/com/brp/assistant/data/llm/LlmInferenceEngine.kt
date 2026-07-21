@@ -174,7 +174,8 @@ class LlmInferenceEngine @Inject constructor(
             // Значение = размер KV-cache модели (вход + выход суммарно).
             val fileName = modelFile.name.lowercase()
             val ekvMatch = Regex("ekv(\\d+)").find(fileName)
-            val maxTokens = ekvMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1024
+            // По умолчанию ставим 2048, так как 1024 слишком мало (системный промпт уже ~900 токенов)
+            val maxTokens = ekvMatch?.groupValues?.get(1)?.toIntOrNull() ?: 2048
 
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
