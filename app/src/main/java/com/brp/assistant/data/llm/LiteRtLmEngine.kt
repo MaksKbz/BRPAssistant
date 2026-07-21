@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
@@ -52,6 +53,9 @@ class LiteRtLmEngine @Inject constructor(
         // требуют минимум ~4000. 4096 — безопасный минимум для всех моделей.
         // Без этого модель падает: "Input token ids are too long. 1254 >= 1024".
         private const val MAX_TOKENS = 4096
+
+        /** Мягкий лимит выходных токенов в одном ответе. */
+        private const val MAX_OUTPUT_TOKENS = 1500
     }
 
     private var engine: Engine? = null
@@ -146,16 +150,29 @@ class LiteRtLmEngine @Inject constructor(
     /**
      * Генерирует ответ на промпт в виде потока частичных токенов.
      *
-     * Проверяем isClosed перед использованием engine — это предотвращает
-     * нативный краш при вызове на уже освобождённом Engine
-     * (например, при смене модели во время генерации).
+     * Фильтрует блоки <think>...</think> (цепочка рассуждений Qwen3),
+     * поддерживает теги, разрезанные между чанками.
+     *
+     * Лимит выходных токенов:
+     *   Флаг limitReached + takeWhile { !limitReached } реально останавливают
+     *   upstream Flow. Предыдущий return@collect только пропускал текущий
+     *   callback, но Flow продолжал работать.
+     *
+     * Незакрытый <think>:
+     *   Если стрим оборвался внутри <think>-блока (insideThink=true),
+     *   буфер молча отбрасывается — reasoning без </think> является
+     *   неполным и не должен показываться пользователю.
+     *
+     * Суффикс тега (split-chunk):
+     *   Итерируем len downTo 1 (жадно) чтобы выбрать НАИБОЛЬШИЙ суффикс
+     *   буфера, который является префиксом "<think>" или "</think>".
+     *   Это предотвращает ложное совпадение "<" одновременно для обоих тегов.
      */
     fun generateResponseStreaming(
         prompt: String,
         systemPrompt: String = "",
         onPartial: (String) -> Unit
     ): Flow<String> = flow {
-        // Быстрая проверка до обращения к нативному объекту
         if (isClosed) throw IllegalStateException("LiteRtLmEngine был закрыт во время генерации")
 
         val eng = engine
@@ -163,10 +180,6 @@ class LiteRtLmEngine @Inject constructor(
 
         val convConfig = ConversationConfig(
             systemInstruction = if (systemPrompt.isNotBlank()) Contents.of(systemPrompt) else null,
-            // SamplerConfig предотвращает повторы (repetition loop):
-            // topK=40 — выбираем из 40 лучших токенов
-            // topP=0.9 — nucleus sampling
-            // temperature=0.7 — умеренная креативность
             samplerConfig = SamplerConfig(
                 topK = 40,
                 topP = 0.9,
@@ -178,84 +191,98 @@ class LiteRtLmEngine @Inject constructor(
             var insideThink = false
             var buffer = ""
             var tokenCount = 0
-            
-            conversation.sendMessageAsync(prompt).collect { message ->
-                tokenCount++
-                if (tokenCount > 1500) {
-                    Log.w(TAG, "Generation stopped: token limit reached (1500)")
-                    return@collect
-                }
-                if (isClosed) throw IllegalStateException("LiteRtLmEngine закрыт в процессе генерации")
-                
-                buffer += message.toString()
-                var i = 0
-                val sb = StringBuilder()
-                
-                while (i < buffer.length) {
-                    if (!insideThink) {
-                        val startIdx = buffer.indexOf("<think>", i)
-                        if (startIdx != -1) {
-                            sb.append(buffer.substring(i, startIdx))
-                            insideThink = true
-                            i = startIdx + 7
-                        } else {
-                            // Check if the end of buffer has a prefix of "<think>"
-                            var prefixLen = 0
-                            for (len in 1..6) {
-                                if (buffer.length >= len) {
-                                    val suffix = buffer.substring(buffer.length - len)
-                                    if ("<think>".startsWith(suffix)) {
-                                        prefixLen = len
+            // takeWhile читает этот флаг перед каждым элементом upstream.
+            // Когда limitReached=true — Flow завершается, нативная генерация
+            // прекращается (в отличие от return@collect, который только
+            // пропускает текущий элемент).
+            var limitReached = false
+
+            conversation.sendMessageAsync(prompt)
+                .takeWhile { !limitReached }
+                .collect { message ->
+                    if (isClosed) throw IllegalStateException(
+                        "LiteRtLmEngine закрыт в процессе генерации"
+                    )
+
+                    tokenCount++
+                    if (tokenCount > MAX_OUTPUT_TOKENS) {
+                        Log.w(TAG, "Generation stopped: output token limit reached ($MAX_OUTPUT_TOKENS)")
+                        limitReached = true
+                        return@collect
+                    }
+
+                    buffer += message.toString()
+                    var i = 0
+                    val sb = StringBuilder()
+
+                    while (i < buffer.length) {
+                        if (!insideThink) {
+                            val startIdx = buffer.indexOf("<think>", i)
+                            if (startIdx != -1) {
+                                sb.append(buffer.substring(i, startIdx))
+                                insideThink = true
+                                i = startIdx + 7
+                            } else {
+                                // Жадный поиск: берём наибольший суффикс буфера,
+                                // являющийся префиксом "<think>" (итерация сверху вниз).
+                                var prefixLen = 0
+                                for (len in 6 downTo 1) {
+                                    if (buffer.length >= len) {
+                                        val suffix = buffer.substring(buffer.length - len)
+                                        if ("<think>".startsWith(suffix)) {
+                                            prefixLen = len
+                                            break
+                                        }
                                     }
                                 }
+                                if (prefixLen > 0) {
+                                    sb.append(buffer.substring(i, buffer.length - prefixLen))
+                                    i = buffer.length - prefixLen
+                                } else {
+                                    sb.append(buffer.substring(i))
+                                    i = buffer.length
+                                }
+                                break
                             }
-                            if (prefixLen > 0) {
-                                sb.append(buffer.substring(i, buffer.length - prefixLen))
-                                i = buffer.length - prefixLen
-                            } else {
-                                sb.append(buffer.substring(i))
-                                i = buffer.length
-                            }
-                            break
-                        }
-                    } else {
-                        val endIdx = buffer.indexOf("</think>", i)
-                        if (endIdx != -1) {
-                            insideThink = false
-                            i = endIdx + 8
                         } else {
-                            // Check if the end of buffer has a prefix of "</think>"
-                            var prefixLen = 0
-                            for (len in 1..7) {
-                                if (buffer.length >= len) {
-                                    val suffix = buffer.substring(buffer.length - len)
-                                    if ("</think>".startsWith(suffix)) {
-                                        prefixLen = len
+                            val endIdx = buffer.indexOf("</think>", i)
+                            if (endIdx != -1) {
+                                insideThink = false
+                                i = endIdx + 8
+                            } else {
+                                // Жадный поиск суффикса "</think>".
+                                var prefixLen = 0
+                                for (len in 7 downTo 1) {
+                                    if (buffer.length >= len) {
+                                        val suffix = buffer.substring(buffer.length - len)
+                                        if ("</think>".startsWith(suffix)) {
+                                            prefixLen = len
+                                            break
+                                        }
                                     }
                                 }
+                                i = if (prefixLen > 0) buffer.length - prefixLen else buffer.length
+                                break
                             }
-                            if (prefixLen > 0) {
-                                i = buffer.length - prefixLen
-                            } else {
-                                i = buffer.length
-                            }
-                            break
                         }
                     }
-                }
-                
-                buffer = buffer.substring(i)
-                val tokenToEmit = sb.toString()
 
-                if (tokenToEmit.isNotEmpty()) {
-                    onPartial(tokenToEmit)
-                    emit(tokenToEmit)
+                    buffer = buffer.substring(i)
+                    val tokenToEmit = sb.toString()
+                    if (tokenToEmit.isNotEmpty()) {
+                        onPartial(tokenToEmit)
+                        emit(tokenToEmit)
+                    }
                 }
-            }
-            
+
+            // Флаш остатка буфера после завершения стрима.
+            // Если поток завершился внутри <think>-блока (insideThink=true),
+            // буфер содержит неполный reasoning — молча отбрасываем.
             if (buffer.isNotEmpty() && !insideThink) {
                 onPartial(buffer)
                 emit(buffer)
+            } else if (buffer.isNotEmpty()) {
+                Log.w(TAG, "Stream ended with unclosed <think> block — discarding ${buffer.length} chars")
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -300,12 +327,10 @@ class LiteRtLmEngine @Inject constructor(
     fun close() = closeInternal()
 
     private fun closeInternal() {
-        isClosed = true   // выставляем флаг ДО освобождения объекта
+        isClosed = true
         val eng = engine
         engine = null
         activeModelInfo = null
-        // Engine.close() бросает IllegalStateException, если движок не инициализирован —
-        // закрываем только корректно инициализированный экземпляр.
         if (eng != null && eng.isInitialized()) {
             try {
                 eng.close()
@@ -313,6 +338,5 @@ class LiteRtLmEngine @Inject constructor(
                 Log.w(TAG, "Engine close error", e)
             }
         }
-        // isClosed остаётся true до следующего успешного initialize()
     }
 }
