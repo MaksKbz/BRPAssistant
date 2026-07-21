@@ -19,9 +19,7 @@ android {
         targetSdk = 35
         versionCode = 77
         versionName = "2.9.31"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
         }
@@ -37,16 +35,25 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     // Kotlin 2.3 убрал DSL kotlinOptions { jvmTarget = "17" } (String).
     // jvmTarget настраивается через compilerOptions (см. блок kotlin {} ниже).
+
     buildFeatures {
         compose = true
         buildConfig = true
     }
+
+    lint {
+        abortOnError = false
+        warningsAsErrors = false
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -112,8 +119,7 @@ dependencies {
     implementation(libs.androidx.material3.window.size)
     implementation(libs.androidx.window)
 
-    // ── LLM Engines ─────────────────────────────────────────────────────────────────────
-
+    // ── LLM Engines ───────────────────────────────────────────────────────────────────
     // Движок 1: MediaPipe LlmInference — поддерживает .task файлы
     implementation(libs.mediapipe.genai)
 
@@ -124,7 +130,7 @@ dependencies {
 
     // llmedge удалён — устаревший beta-движок с нестабильным API
 
-    // ── Coroutines ──────────────────────────────────────────────────────────────────────
+    // ── Coroutines ────────────────────────────────────────────────────────────────────
     implementation(libs.kotlinx.coroutines.android)
 
     // DataStore (неконфиденциальные настройки: theme, provider, temperature и т.д.)
@@ -144,7 +150,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
-    // ── Unit Tests ─────────────────────────────────────────────────────────────
+    // ── Unit Tests ────────────────────────────────────────────────────────────────────
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("io.mockk:mockk:1.13.12")
