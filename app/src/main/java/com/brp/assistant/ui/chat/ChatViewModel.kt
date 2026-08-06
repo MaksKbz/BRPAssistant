@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.brp.assistant.data.db.entities.ChatMessageEntity
 import com.brp.assistant.data.db.entities.ChatSessionEntity
 import com.brp.assistant.data.llm.LlmInferenceEngine
+import com.brp.assistant.data.llm.LocalInferenceUseCase
 import com.brp.assistant.data.llm.OfflineModelInfo
 import com.brp.assistant.data.llm.PublicOfflineModelCatalog
 import com.brp.assistant.data.repository.ChatSessionRepository
@@ -136,6 +137,12 @@ class ChatViewModel @Inject constructor(
                 modelId != null || hasApiKey
             }.collect { ready ->
                 _state.update { it.copy(isModelReady = ready) }
+            }
+        }
+
+        viewModelScope.launch {
+            localInference.resourceWarnings.collect { warning ->
+                _state.update { it.copy(batteryWarning = warning) }
             }
         }
 
@@ -357,9 +364,8 @@ class ChatViewModel @Inject constructor(
                 return
             }
 
-        // Сбрасываем онлайн
-        viewModelScope.launch { settingsRepository.setChatForceOnline(null) }
-        _state.update { it.copy(selectedLlmModelId = modelId, selectedOnlineProvider = null) }
+        // Не меняем online route до успешной активации offline-модели.
+        _state.update { it.copy(selectedLlmModelId = modelId) }
 
         if (llmEngine.isModelDownloaded(model)) {
             // Модель уже скачана → активируем автоматически
@@ -395,7 +401,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun downloadFromChat(model: com.brp.assistant.data.llm.OfflineModelInfo) {
-        // P0: проверка безопасности модели перед скачиванием из чата (как в ModelManager)
+        // P0: проверка безопасности модели пе: проверка безопасности модели перед скачиванием из чата (как в ModelManager)
         val recommendation = recommendLlmModeUseCase.evaluate(model)
         if (!recommendation.isSafe) {
             _state.update {

@@ -7,6 +7,9 @@ import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.domain.InferenceResourceMonitor
 import com.brp.assistant.domain.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,7 +19,7 @@ import javax.inject.Singleton
  *
  * До каждого запуска вызывает [InferenceResourceMonitor.checkMemory]
  * и отклоняет генерацию если RAM < 200 MB или heap < 50 MB.
- * Предупреждение о батарее передаётся в UI через onPartial().
+ * Предупреждение о батарее публикуется отдельно через resourceWarnings и не смешивается с ответом.
  *
  * Все методы возвращают Result<String>.
  * При ошибке вызывающий код должен переключиться на RemoteLlmEngine.
@@ -27,6 +30,9 @@ class LocalInferenceUseCase @Inject constructor(
     private val promptBuilder: PromptBuilder,
     private val resourceMonitor: InferenceResourceMonitor
 ) {
+    private val _resourceWarnings = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val resourceWarnings: SharedFlow<String> = _resourceWarnings.asSharedFlow()
+
     companion object {
         private const val TAG = "LocalInferenceUseCase"
 
@@ -162,7 +168,8 @@ class LocalInferenceUseCase @Inject constructor(
         // P1: не отправляем через onPartial, чтобы не повреждать текст ответа LLM
         resourceCheck.batteryWarning?.let { warning ->
             Log.d(TAG, "Battery warning: $warning")
-            // UI warning должен показываться отдельным состоянием, а не токеном стрима
+            _resourceWarnings.tryEmit(warning)
+            // UI warning показывается отдельным состоянием, а не токеном стрима
         }
 
         Log.d(TAG, "Sending prompt (${prompt.length} chars) to local model")

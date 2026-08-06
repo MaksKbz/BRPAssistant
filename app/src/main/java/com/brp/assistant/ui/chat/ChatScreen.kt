@@ -318,6 +318,7 @@ fun ChatScreen(
     hasOnlineKeyMissing: Boolean = false,
     /** #12 — предупреждение от AppHealthChecker; null = всё хорошо */
     healthWarning: String? = null,
+    batteryWarning: String? = null,
     /** #13 — текущий запрос поиска по истории */
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
@@ -436,6 +437,14 @@ fun ChatScreen(
                 HealthWarningBanner(
                     message = healthWarning,
                     onDismiss = { healthDismissed = true },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+
+            if (batteryWarning != null) {
+                HealthWarningBanner(
+                    message = batteryWarning,
+                    onDismiss = {},
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }

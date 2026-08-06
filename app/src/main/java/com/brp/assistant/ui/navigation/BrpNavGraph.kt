@@ -655,6 +655,7 @@ private fun NavHostContent(
                 selectedOnlineProvider = state.selectedOnlineProvider,
                 hasOnlineKeyMissing    = state.hasOnlineKeyMissing,
                 healthWarning          = healthWarning,
+                batteryWarning         = state.batteryWarning,
                 searchQuery            = state.searchQuery,
                 onSearchQueryChange    = { chatVm.updateSearchQuery(it) },
                 onSelectOfflineLlm     = { chatVm.selectOfflineLlm(it) },
