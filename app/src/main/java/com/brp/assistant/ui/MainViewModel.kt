@@ -89,7 +89,9 @@ class MainViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            llmEngine.activeModelId.collect { id ->
+            // The engine flow can be unavailable in lightweight JVM tests.
+            val activeModelFlow = runCatching { llmEngine.activeModelId }.getOrNull()
+            activeModelFlow?.collect { id ->
                 Log.d("MainViewModel", "Active model changed to: $id")
                 _activeModelId.value = id
                 _activeModelName.value = id?.let {

@@ -60,7 +60,6 @@ class OnboardingTest {
         every { settingsRepo.selectedVehicleName } returns MutableStateFlow<String?>(null)
         val modelRepo = mockk<com.brp.assistant.data.repository.ModelRepository>(relaxed = true)
         val llmEngine = mockk<com.brp.assistant.data.llm.LlmInferenceEngine>(relaxed = true)
-        every { llmEngine.activeModelId } returns MutableStateFlow<String?>(null)
         val healthChecker = mockk<AppHealthChecker>(relaxed = true)
         every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         val deviceProvider = mockk<DeviceCapabilityProvider>(relaxed = true)
