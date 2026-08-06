@@ -28,7 +28,7 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
  * Остальные настройки — DataStore.
  */
 @Singleton
-class SettingsRepository @Inject constructor(
+open class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     // ── DataStore keys ─────────────────────────────────────────────────────────────────────────

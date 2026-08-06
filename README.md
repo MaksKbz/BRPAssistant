@@ -51,7 +51,6 @@ gradle assembleRelease --stacktrace --no-daemon
 ## Известные нюансы
 - MediaPipe: только синхронный `generateResponse()` на `Dispatchers.IO`
 - `setMaxTokens` парсится из имени файла (`ekv1280`, `ekv4096`)
-- `chatForceOnline` читается только из `_state`, не из DataStore
 - SmolLM2 = `.litertlm`, не `.task`
 - `cleanModelOutput` чистит BPE мусор/теги
 

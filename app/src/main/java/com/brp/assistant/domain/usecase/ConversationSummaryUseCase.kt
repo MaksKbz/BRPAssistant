@@ -72,6 +72,6 @@ class ConversationSummaryUseCase @Inject constructor() {
     companion object {
         const val DEFAULT_MAX_LENGTH = 60
         const val DEFAULT_FALLBACK = "Новый чат"
-        private const val ELLIPSIS = "…"   // U+2026, один символ
+        private const val ELLIPSIS = "..."
     }
 }

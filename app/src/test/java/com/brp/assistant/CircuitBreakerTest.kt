@@ -20,7 +20,10 @@ class CircuitBreakerTest {
         every { Log.i(any(), any<String>()) } returns 0
         every { Log.w(any(), any<String>()) } returns 0
         every { Log.d(any(), any<String>()) } returns 0
-        breaker = CircuitBreaker(failureThreshold = 3, resetTimeoutMs = 0)
+        // resetTimeoutMs=60_000 keeps the breaker in OPEN state for the
+        // entire duration of the test (no wall-clock time will exceed 60 s
+        // inside a synchronous runTest block).
+        breaker = CircuitBreaker(failureThreshold = 3, resetTimeoutMs = 60_000L)
     }
 
     @Test
@@ -44,10 +47,13 @@ class CircuitBreakerTest {
 
     @Test
     fun `resets to closed after open duration expires`() = runTest {
+        // Use a fresh breaker with resetTimeoutMs=0 so timeout expires instantly
+        val fastBreaker = CircuitBreaker(failureThreshold = 3, resetTimeoutMs = 0)
         repeat(3) {
-            try { breaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
+            try { fastBreaker.call("test") { throw RuntimeException("fail") } } catch (_: Exception) {}
         }
-        val result = breaker.call("test") { "recovered" }
+        // resetTimeoutMs=0 → elapsed >= 0 → transitions to HALF_OPEN → probe call succeeds → CLOSED
+        val result = fastBreaker.call("test") { "recovered" }
         assertEquals("recovered", result)
     }
 

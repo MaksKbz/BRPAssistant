@@ -47,7 +47,8 @@ class MainViewModelTest {
 
         settingsRepo = mockk(relaxed = true)
         modelRepo = mockk(relaxed = true)
-        llmEngine = mockk(relaxed = true)
+        // The engine Flow is intentionally unavailable in this JVM unit test.
+        llmEngine = mockk(relaxed = false)
         healthChecker = mockk(relaxed = true)
         deviceCapabilityProvider = mockk(relaxed = true)
 
@@ -55,7 +56,6 @@ class MainViewModelTest {
         every { settingsRepo.appTheme } returns MutableStateFlow("System")
         every { settingsRepo.onboardingCompleted } returns MutableStateFlow(true)
         every { settingsRepo.selectedVehicleName } returns MutableStateFlow<String?>(null)
-        every { llmEngine.activeModelId } returns MutableStateFlow<String?>(null)
         every { healthChecker.status } returns MutableStateFlow(HealthStatus(diskFreeGb = 10.0, dbOk = true))
         every { deviceCapabilityProvider.formatDeviceInfo() } returns "Test Device"
         every { deviceCapabilityProvider.checkMemory() } returns DeviceCapabilityProvider.MemoryStatus(200, 500, 4000, false)
