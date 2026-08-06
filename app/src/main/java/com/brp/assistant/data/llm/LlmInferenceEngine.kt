@@ -38,7 +38,7 @@ import javax.inject.Singleton
  * детали выбора движка полностью скрыты.
  */
 @Singleton
-class LlmInferenceEngine @Inject constructor(
+open class LlmInferenceEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val liteRtLmEngine: LiteRtLmEngine
