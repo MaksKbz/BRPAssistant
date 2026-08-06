@@ -47,7 +47,8 @@ class MainViewModelTest {
 
         settingsRepo = mockk(relaxed = true)
         modelRepo = mockk(relaxed = true)
-        llmEngine = mockk(relaxed = true)
+        // The engine Flow is intentionally unavailable in this JVM unit test.
+        llmEngine = mockk(relaxed = false)
         healthChecker = mockk(relaxed = true)
         deviceCapabilityProvider = mockk(relaxed = true)
 
