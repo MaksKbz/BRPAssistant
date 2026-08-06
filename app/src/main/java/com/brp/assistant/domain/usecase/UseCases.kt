@@ -110,14 +110,37 @@ class DiagnoseUseCase @Inject constructor(
                     userChunks = userChunks.take(4)
                 )
                 val localResult = localInference.generatePreparedPrompt(localPrompt, onPartial)
-                localResult.onSuccess { text ->
+                if (localResult.isSuccess) {
                     emit(Result.success(DiagnosisResult(
-                        message = text,
+                        message = localResult.getOrThrow(),
                         riskLevel = "low",
                         sources = emptyList(),
                         requiresEvacuation = false
                     )))
-                }.onFailure { emit(Result.failure(it)) }
+                } else {
+                    val error = localResult.exceptionOrNull()!!
+                    if (!InferenceRoutingPolicy.mayFallbackToRemote(error, apiKey)) {
+                        emit(Result.failure(error))
+                    } else {
+                        val remoteResult = remoteLlm.generateResponse(
+                            prompt = localPrompt,
+                            provider = provider,
+                            modelName = modelName,
+                            apiKey = apiKey!!,
+                            systemPrompt = systemPrompt,
+                            temperature = temperature,
+                            onPartial = onPartial
+                        )
+                        remoteResult.onSuccess { text ->
+                            emit(Result.success(DiagnosisResult(
+                                message = text,
+                                riskLevel = "low",
+                                sources = emptyList(),
+                                requiresEvacuation = false
+                            )))
+                        }.onFailure { emit(Result.failure(it)) }
+                    }
+                }
                 return@flow
             }
 
@@ -221,7 +244,22 @@ class ChatUseCase @Inject constructor(
                 chunks = chunks.take(4),
                 userChunks = userChunks.take(4)
             )
-            return localInference.generatePreparedPrompt(localPrompt, onPartial)
+            val localResult = localInference.generatePreparedPrompt(localPrompt, onPartial)
+            if (localResult.isSuccess) return localResult
+            val localError = localResult.exceptionOrNull()!!
+            if (!InferenceRoutingPolicy.mayFallbackToRemote(localError, apiKey)) {
+                return localResult
+            }
+            // Resource-only fallback: reuse the bounded local prompt and the configured key.
+            return remoteLlm.generateResponse(
+                prompt = localPrompt,
+                provider = provider,
+                modelName = modelName,
+                apiKey = apiKey!!,
+                systemPrompt = systemPrompt,
+                temperature = temperature,
+                onPartial = onPartial
+            )
         }
 
         // ОНЛАЙН: полный промпт с RAG
