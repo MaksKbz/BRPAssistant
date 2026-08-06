@@ -84,6 +84,7 @@ data class ChatState(
 class ChatViewModel @Inject constructor(
     private val chatUseCase: ChatUseCase,
     private val diagnoseUseCase: DiagnoseUseCase,
+    private val localInference: LocalInferenceUseCase,
     private val llmEngine: LlmInferenceEngine,
     private val settingsRepository: SettingsRepository,
     private val chatRepo: ChatSessionRepository,
