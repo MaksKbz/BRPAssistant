@@ -77,7 +77,8 @@ data class ChatState(
     val healthWarning: String? = null,
     val searchQuery: String = "",
     val pendingDownloadWarning: String? = null,
-    val pendingModelToDownload: com.brp.assistant.data.llm.OfflineModelInfo? = null
+    val pendingModelToDownload: com.brp.assistant.data.llm.OfflineModelInfo? = null,
+    val batteryWarning: String? = null
 )
 
 @HiltViewModel
