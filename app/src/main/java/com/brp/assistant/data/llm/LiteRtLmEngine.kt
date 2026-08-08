@@ -60,6 +60,7 @@ class LiteRtLmEngine @Inject constructor(
 
     private var engine: Engine? = null
     private var activeModelInfo: OfflineModelInfo? = null
+    @Volatile private var stopRequested = false
 
     /**
      * Флаг закрытия движка.
@@ -112,6 +113,7 @@ class LiteRtLmEngine @Inject constructor(
                 engine = eng
                 activeModelInfo = model
                 isClosed = false   // сбрасываем флаг после успешной инициализации
+                stopRequested = false
                 Log.i(TAG, "LiteRT-LM initialized: ${model.title}")
                 Result.success(Unit)
 
@@ -198,7 +200,7 @@ class LiteRtLmEngine @Inject constructor(
             var limitReached = false
 
             conversation.sendMessageAsync(prompt)
-                .takeWhile { !limitReached }
+                .takeWhile { !limitReached && !stopRequested }
                 .collect { message ->
                     if (isClosed) throw IllegalStateException(
                         "LiteRtLmEngine закрыт в процессе генерации"
@@ -315,6 +317,16 @@ class LiteRtLmEngine @Inject constructor(
             Log.e(TAG, "generateResponse failed: $userMsg", e)
             Result.failure(RuntimeException(userMsg, e))
         }
+    }
+
+    /** Cooperatively stops the current stream while keeping the engine reusable. */
+    fun stop() {
+        stopRequested = true
+    }
+
+    /** Each request owns its conversation; reset clears only the cancellation state. */
+    suspend fun resetConversation() {
+        stopRequested = false
     }
 
     fun isReady(): Boolean = engine != null && activeModelInfo != null && !isClosed
