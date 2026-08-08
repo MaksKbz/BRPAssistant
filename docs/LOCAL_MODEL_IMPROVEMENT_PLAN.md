@@ -84,7 +84,7 @@
 
 ## Приоритет 6 — WorkManager для загрузки моделей
 
-Статус: в проекте уже есть `ModelDownloadWorker` с foreground notification, retry, network/space checks и `.part` files. Следующая часть — подключить к нему chat download path, который пока использует прямой downloader Flow.
+Статус: chat/model-manager download path подключён к `ModelDownloadWorker`. Используются foreground notification, network constraints, exponential retry, unique work, progress из `WorkInfo`, checksum verification и `.part` files.
 
 Перенести большие загрузки из lifecycle ViewModel в общий worker:
 
