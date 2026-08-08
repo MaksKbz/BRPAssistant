@@ -110,7 +110,7 @@ open class LlmInferenceEngine @Inject constructor(
 
     // ── Инициализация ───────────────────────────────────────────────────
 
-    suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
+    override suspend fun initialize(model: OfflineModelInfo): Result<Unit> = mutex.withLock {
         withContext(Dispatchers.IO) {
             try {
                 closeInternal()
@@ -205,10 +205,10 @@ open class LlmInferenceEngine @Inject constructor(
      * генерации токенов является Error, а не Exception, и без этого не
      * перехватывался, вызывая краш на устройствах с 3 ГБ RAM.
      */
-    suspend fun generateResponse(
+    override suspend fun generateResponse(
         prompt: String,
         onPartial: (String) -> Unit,
-        systemPrompt: String = ""
+        systemPrompt: String
     ): Result<String> {
         return when (activeModelInfo?.format) {
             ModelFormat.LITERTLM -> {
