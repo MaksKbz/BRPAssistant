@@ -62,8 +62,16 @@ class DeviceCapabilityProvider @Inject constructor(
      *   Qwen3-4B    (~4000 МБ) → нужно ~10 ГБ   → предупреждение на <12 ГБ устройствах
      */
     fun isSafeForModel(model: OfflineModelInfo): Boolean {
-        if (model.approxSizeMb <= 0) return true  // размер неизвестен — не блокируем
-        val requiredMb = (model.approxSizeMb * RAM_OVERHEAD_MULTIPLIER).toLong()
+        if (model.approxSizeMb <= 0 && model.estimatedPeakMemoryMb <= 0) {
+            return true // размер неизвестен — не блокируем custom model до runtime check
+        }
+        val estimatedPeakMb = if (model.estimatedPeakMemoryMb > 0) {
+            model.estimatedPeakMemoryMb.toLong()
+        } else {
+            (model.approxSizeMb * RAM_OVERHEAD_MULTIPLIER).toLong()
+        }
+        // Keep both catalog safety signals: physical-RAM floor and runtime peak estimate.
+        val requiredMb = maxOf(model.minRamGb * 1024L, estimatedPeakMb)
         return checkMemory().totalRamMb >= requiredMb
     }
 

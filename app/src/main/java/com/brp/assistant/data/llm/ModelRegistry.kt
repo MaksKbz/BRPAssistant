@@ -45,6 +45,12 @@ data class OfflineModelInfo(
     val description: String,
     /** Формат файла — определяет движок вывода */
     val format: ModelFormat = ModelFormat.TASK,
+    /** Estimated native/runtime peak memory, not merely the downloaded file size. */
+    val estimatedPeakMemoryMb: Int = approxSizeMb * 5 / 2,
+    /** Maximum context supported by the packaged model when known. */
+    val maxContextTokens: Int = 2048,
+    /** Safe default output budget for this model/task. */
+    val defaultMaxTokens: Int = 2048,
     val downloadUrl: String? = null,
     val isCustom: Boolean = false
 )
