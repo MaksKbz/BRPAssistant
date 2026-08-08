@@ -180,12 +180,13 @@ class LiteRtLmEngine @Inject constructor(
         val eng = engine
             ?: throw IllegalStateException("LiteRtLmEngine не инициализирован")
 
+        val generationConfig = GenerationConfig.forModel(activeModelInfo)
         val convConfig = ConversationConfig(
             systemInstruction = if (systemPrompt.isNotBlank()) Contents.of(systemPrompt) else null,
             samplerConfig = SamplerConfig(
-                topK = 40,
-                topP = 0.9,
-                temperature = 0.7
+                topK = generationConfig.topK,
+                topP = generationConfig.topP,
+                temperature = generationConfig.temperature
             )
         )
 
@@ -207,8 +208,8 @@ class LiteRtLmEngine @Inject constructor(
                     )
 
                     tokenCount++
-                    if (tokenCount > MAX_OUTPUT_TOKENS) {
-                        Log.w(TAG, "Generation stopped: output token limit reached ($MAX_OUTPUT_TOKENS)")
+                    if (tokenCount > generationConfig.maxTokens) {
+                        Log.w(TAG, "Generation stopped: output token limit reached (${generationConfig.maxTokens})")
                         limitReached = true
                         return@collect
                     }
