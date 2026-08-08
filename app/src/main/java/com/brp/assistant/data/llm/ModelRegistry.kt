@@ -51,6 +51,8 @@ data class OfflineModelInfo(
     val maxContextTokens: Int = 2048,
     /** Safe default output budget for this model/task. */
     val defaultMaxTokens: Int = 2048,
+    /** Optional catalog checksum. Null is allowed for legacy/custom entries. */
+    val sha256: String? = null,
     val downloadUrl: String? = null,
     val isCustom: Boolean = false
 )
