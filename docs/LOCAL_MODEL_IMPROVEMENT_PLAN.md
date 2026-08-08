@@ -84,6 +84,8 @@
 
 ## Приоритет 6 — WorkManager для загрузки моделей
 
+Статус: в проекте уже есть `ModelDownloadWorker` с foreground notification, retry, network/space checks и `.part` files. Следующая часть — подключить к нему chat download path, который пока использует прямой downloader Flow.
+
 Перенести большие загрузки из lifecycle ViewModel в общий worker:
 
 - переживание закрытия приложения;
@@ -93,6 +95,8 @@
 - уведомления о завершении и ошибке.
 
 ## Приоритет 7 — allowlist и artifact integrity
+
+Статус: добавлен `ModelIntegrityVerifier` с host allowlist и опциональной SHA-256 проверкой до публикации модели как успешно скачанной. Для полного покрытия каталога нужно заполнить SHA-256 для официальных artifacts.
 
 Для каждой модели проверять:
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
+import com.brp.assistant.data.llm.ModelIntegrityVerifier
 import com.brp.assistant.data.llm.OfflineModelInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -65,8 +66,14 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
 
         val outFile = File(modelDir, model.filename)
         if (outFile.exists() && outFile.length() > 1024 * 1024) {
-            emit(ModelDownloadState.Success(model.id, outFile))
-            return@flow
+            val integrity = ModelIntegrityVerifier.verifySha256(outFile, model.sha256)
+            if (integrity.isSuccess) {
+                emit(ModelDownloadState.Success(model.id, outFile))
+            } else {
+                Log.w(TAG, "Removing downloaded model with invalid checksum: ${model.id}")
+                outFile.delete()
+            }
+            if (integrity.isSuccess) return@flow
         }
         val tempFile = File(outFile.absolutePath + ".part")
 
@@ -151,6 +158,9 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
          */
         val partialBytes = if (tempFile.exists()) tempFile.length() else 0L
 
+        if (!ModelIntegrityVerifier.isAllowedDownloadUrl(finalUrl)) {
+            throw IOException("Источник модели не входит в allowlist: $finalUrl")
+        }
         Log.d(TAG, "Requesting model from: $finalUrl")
 
         val requestBuilder = Request.Builder()
@@ -272,6 +282,11 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
             if (!tempFile.renameTo(outFile)) {
                 throw IOException("Не удалось завершить загрузку файла")
             }
+        }
+        val integrity = ModelIntegrityVerifier.verifySha256(outFile, model.sha256)
+        if (integrity.isFailure) {
+            outFile.delete()
+            throw IOException(integrity.exceptionOrNull()?.message ?: "Проверка модели не пройдена")
         }
         emit(ModelDownloadState.Success(model.id, outFile))
     }
