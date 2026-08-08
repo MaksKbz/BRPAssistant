@@ -56,81 +56,67 @@ class PublicHuggingFaceModelDownloader @Inject constructor(
 
     private val TAG = "ModelDownloader"
 
+    /** Queues a foreground WorkManager job so downloads survive process death. */
     fun downloadModel(model: OfflineModelInfo): Flow<ModelDownloadState> = flow {
-        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
-        val modelDir = File(baseDir, "models/${model.id}")
-        if (!modelDir.exists() && !modelDir.mkdirs()) {
-            emit(ModelDownloadState.Error(model.id, "Не удалось создать директорию для модели"))
+        val url = model.downloadUrl
+            ?: "https://huggingface.co/${model.repoId}/resolve/main/${Uri.encode(model.filename)}?download=true"
+        if (!ModelIntegrityVerifier.isAllowedDownloadUrl(url)) {
+            emit(ModelDownloadState.Error(model.id, "Источник модели не входит в allowlist"))
             return@flow
         }
 
-        val outFile = File(modelDir, model.filename)
-        if (outFile.exists() && outFile.length() > 1024 * 1024) {
-            val integrity = ModelIntegrityVerifier.verifySha256(outFile, model.sha256)
-            if (integrity.isSuccess) {
-                emit(ModelDownloadState.Success(model.id, outFile))
-            } else {
-                Log.w(TAG, "Removing downloaded model with invalid checksum: ${model.id}")
-                outFile.delete()
-            }
-            if (integrity.isSuccess) return@flow
-        }
-        val tempFile = File(outFile.absolutePath + ".part")
+        val workManager = androidx.work.WorkManager.getInstance(context)
+        val request = androidx.work.OneTimeWorkRequestBuilder<com.brp.assistant.data.workers.ModelDownloadWorker>()
+            .setInputData(
+                com.brp.assistant.data.workers.ModelDownloadWorker.buildWorkData(
+                    url = url,
+                    fileName = model.filename,
+                    size = model.approxSizeMb.toLong() * 1024 * 1024,
+                    modelId = model.id,
+                    sha256 = model.sha256
+                )
+            )
+            .setConstraints(
+                androidx.work.Constraints.Builder()
+                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(
+                androidx.work.BackoffPolicy.EXPONENTIAL,
+                30, java.util.concurrent.TimeUnit.SECONDS
+            )
+            .build()
+        workManager.enqueueUniqueWork(
+            "model-download-${model.id}",
+            androidx.work.ExistingWorkPolicy.REPLACE,
+            request
+        )
 
-        val approxSize = if (model.approxSizeMb > 0) model.approxSizeMb else 1000
-        val requiredBytes = (approxSize.toLong() * 1024 * 1024) + (200L * 1024 * 1024)
-        if (!hasEnoughSpace(requiredBytes)) {
-            emit(ModelDownloadState.Error(model.id, "Недостаточно места на диске. Нужно ~${approxSize + 200} MB."))
-            return@flow
-        }
-
-        var attempt = 0
-        val maxRetry = 6
-        var success = false
-        var lastError: String? = null
-        var dnsErrors = 0
-
-        while (attempt < maxRetry && !success) {
-            try {
-                val encodedFileName = Uri.encode(model.filename)
-                val currentUrl = when (attempt % 2) {
-                    0    -> "https://hf-mirror.com/${model.repoId}/resolve/main/$encodedFileName?download=true"
-                    else -> model.downloadUrl
-                        ?: "https://huggingface.co/${model.repoId}/resolve/main/$encodedFileName?download=true"
+        var terminal = false
+        workManager.getWorkInfoByIdFlow(request.id).collect { info ->
+            if (terminal || info == null) return@collect
+            when (info.state) {
+                androidx.work.WorkInfo.State.RUNNING,
+                androidx.work.WorkInfo.State.ENQUEUED -> {
+                    val downloaded = info.progress.getLong(com.brp.assistant.data.workers.ModelDownloadWorker.KEY_DOWNLOADED, 0L)
+                    val total = info.progress.getLong(com.brp.assistant.data.workers.ModelDownloadWorker.KEY_SIZE, 0L)
+                    emit(ModelDownloadState.Progress(model.id, model.filename, downloaded, total.takeIf { it > 0 },
+                        if (total > 0) ((downloaded * 100) / total).toInt() else null))
                 }
-
-                downloadFileInternalWithUrl(currentUrl, model, tempFile, outFile).collect { state ->
-                    if (state is ModelDownloadState.Success) success = true
-                    emit(state)
+                androidx.work.WorkInfo.State.SUCCEEDED -> {
+                    val file = File(info.outputData.getString(com.brp.assistant.data.workers.ModelDownloadWorker.KEY_FILEPATH) ?: "")
+                    emit(ModelDownloadState.Success(model.id, file))
+                    terminal = true
+                    return@collect
                 }
-                if (success) break
-            } catch (e: Exception) {
-                attempt++
-                lastError = e.localizedMessage ?: e.message ?: "Неизвестная ошибка"
-                if (lastError.contains("Unable to resolve host") ||
-                    lastError.contains("No address associated with hostname")) {
-                    dnsErrors++
+                androidx.work.WorkInfo.State.FAILED,
+                androidx.work.WorkInfo.State.CANCELLED -> {
+                    emit(ModelDownloadState.Error(model.id,
+                        info.outputData.getString("error") ?: "Загрузка модели не выполнена"))
+                    terminal = true
+                    return@collect
                 }
-                Log.e(TAG, "Attempt $attempt failed for ${model.id}: ${e.message}")
-                // Сохраняем .part файл для resume на следующей попытке.
-                // Удаляем только при полной неудаче — для больших моделей (3-5 ГБ)
-                // потеря частичной загрузки означает вечный цикл с нуля.
-                if (attempt >= maxRetry) {
-                    if (tempFile.exists()) {
-                        val deleted = tempFile.delete()
-                        Log.w(TAG, "Deleted corrupt .part file for ${model.id}: $deleted")
-                    }
-                    val userMessage = if (dnsErrors >= 2) {
-                        "Нет связи с сервером моделей (DNS). Проверьте интернет-соединение " +
-                        "и попробуйте снова. Если ошибка повторяется — возможно, " +
-                        "huggingface.co недоступен в вашем регионе."
-                    } else {
-                        "Ошибка загрузки: $lastError. Проверьте соединение или попробуйте другую модель."
-                    }
-                    emit(ModelDownloadState.Error(model.id, userMessage, e))
-                } else {
-                    delay(2000L * attempt)
-                }
+                else -> Unit
             }
         }
     }.flowOn(Dispatchers.IO)

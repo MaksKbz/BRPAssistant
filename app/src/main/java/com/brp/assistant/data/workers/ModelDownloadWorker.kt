@@ -401,11 +401,16 @@ class ModelDownloadWorker @AssistedInject constructor(
         const val KEY_DOWNLOADED = "downloaded"
         const val KEY_FILEPATH   = "filePath"
 
-        fun buildWorkData(url: String, fileName: String, size: Long): Data =
+        const val KEY_MODEL_ID = "modelId"
+        const val KEY_SHA256 = "sha256"
+
+        fun buildWorkData(url: String, fileName: String, size: Long, modelId: String = fileName.substringBeforeLast('.'), sha256: String? = null): Data =
             Data.Builder()
                 .putString(KEY_URL, url)
                 .putString(KEY_FILENAME, fileName)
                 .putLong(KEY_SIZE, size)
+                .putString(KEY_MODEL_ID, modelId)
+                .apply { if (!sha256.isNullOrBlank()) putString(KEY_SHA256, sha256) }
                 .build()
     }
 }
