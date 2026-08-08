@@ -42,7 +42,7 @@ open class LlmInferenceEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val liteRtLmEngine: LiteRtLmEngine
-) {
+) : LocalLlmRuntime {
     companion object {
         private const val TAG = "LlmInferenceEngine"
         private const val DEFAULT_TEMP = 0.7f
@@ -79,6 +79,7 @@ open class LlmInferenceEngine @Inject constructor(
      * пока MediaPipe генерирует токены в параллельной корутине.
      */
     private val _isGenerating = AtomicBoolean(false)
+    @Volatile private var stopRequested = false
 
     private val _activeModelId = MutableStateFlow<String?>(null)
     val activeModelId: StateFlow<String?> = _activeModelId.asStateFlow()
@@ -144,6 +145,7 @@ open class LlmInferenceEngine @Inject constructor(
                 }
 
                 if (result.isSuccess) {
+                    stopRequested = false
                     activeModelInfo = model
                     _isInitialized.value = true
                     _activeModelId.value = model.id
@@ -256,6 +258,20 @@ open class LlmInferenceEngine @Inject constructor(
         }
     }
 
+    // ── Lifecycle ───────────────────────────────────────────────────────────
+
+    /** Requests cooperative cancellation without destroying the loaded native runtime. */
+    override fun stop() {
+        stopRequested = true
+        liteRtLmEngine.stop()
+    }
+
+    /** TASK has no persistent conversation; LiteRT-LM creates a fresh conversation per request. */
+    override suspend fun resetConversation() {
+        stopRequested = false
+        liteRtLmEngine.resetConversation()
+    }
+
     // ── Состояние ───────────────────────────────────────────────────────────
 
     fun isReady(): Boolean {
@@ -318,7 +334,10 @@ open class LlmInferenceEngine @Inject constructor(
 
     // ── Жизненный цикл ──────────────────────────────────────────────────
 
-    suspend fun close() = mutex.withLock { closeInternal() }
+    override suspend fun close() = mutex.withLock {
+        stopRequested = true
+        closeInternal()
+    }
 
     /**
      * destroy() — убран runBlocking во избежание ANR/deadlock.
