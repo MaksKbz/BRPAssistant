@@ -4,6 +4,7 @@ import android.util.Log
 import com.brp.assistant.data.db.entities.Accessory
 import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.db.entities.KnowledgeCard
+import com.brp.assistant.domain.InferenceBenchmark
 import com.brp.assistant.domain.InferenceResourceMonitor
 import com.brp.assistant.domain.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +33,8 @@ class LocalInferenceUseCase @Inject constructor(
 ) {
     private val _resourceWarnings = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val resourceWarnings: SharedFlow<String> = _resourceWarnings.asSharedFlow()
+    private val _benchmarkResults = MutableSharedFlow<InferenceBenchmark>(extraBufferCapacity = 16)
+    val benchmarkResults: SharedFlow<InferenceBenchmark> = _benchmarkResults.asSharedFlow()
 
     companion object {
         private const val TAG = "LocalInferenceUseCase"
@@ -173,8 +176,29 @@ class LocalInferenceUseCase @Inject constructor(
         }
 
         Log.d(TAG, "Sending prompt (${prompt.length} chars) to local model")
-        engine.generateResponse(prompt, onPartial).also { result ->
-            if (result.isFailure) Log.e(TAG, "Inference failed", result.exceptionOrNull())
-        }
+        val startedAt = System.nanoTime()
+        var firstTokenAt: Long? = null
+        val result = engine.generateResponse(prompt, { partial ->
+            if (firstTokenAt == null && partial.isNotEmpty()) firstTokenAt = System.nanoTime()
+            onPartial(partial)
+        })
+        val finishedAt = System.nanoTime()
+        val afterResources = resourceMonitor.checkMemory()
+        val output = result.getOrNull().orEmpty()
+        val benchmark = InferenceBenchmark(
+            modelId = engine.getActiveModelId(),
+            runtime = engine.getActiveModelFormat()?.name ?: "unknown",
+            timeToFirstTokenMs = firstTokenAt?.let { (it - startedAt) / 1_000_000L },
+            totalTimeMs = (finishedAt - startedAt) / 1_000_000L,
+            outputChars = output.length,
+            outputTokensApprox = (output.length / 4).coerceAtLeast(if (output.isEmpty()) 0 else 1),
+            availableRamBeforeMb = resourceCheck.availRamMb,
+            availableRamAfterMb = afterResources.availRamMb,
+            batteryLevel = afterResources.batteryLevel,
+            batterySaverOn = afterResources.isBatterySaverOn,
+            succeeded = result.isSuccess
+        )
+        _benchmarkResults.tryEmit(benchmark)
+        result.also { if (it.isFailure) Log.e(TAG, "Inference failed", it.exceptionOrNull()) }
     }
 }
