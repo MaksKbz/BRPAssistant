@@ -283,6 +283,8 @@ open class LlmInferenceEngine @Inject constructor(
 
     fun getActiveModelId(): String? = activeModelInfo?.id
 
+    fun getActiveModelFormat(): ModelFormat? = activeModelInfo?.format
+
     fun getActivePromptStyle(): PromptStyle =
         activeModelInfo?.promptStyle ?: PromptStyle.CHATML
 

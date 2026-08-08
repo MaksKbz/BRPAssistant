@@ -68,6 +68,8 @@
 
 ## Приоритет 5 — Model benchmark
 
+Статус: базовый benchmark inference добавлен в `LocalInferenceUseCase` и публикуется через `benchmarkResults`. UI/история benchmark остаются отдельным следующим этапом.
+
 Собирать для каждой модели:
 
 - RAM до/после и доступную RAM;
