@@ -419,7 +419,7 @@ fun ChatScreen(
                     },
                     actions = {
                         TextButton(
-                            onClick = openWhatsApp,
+                            onClick = { openWhatsApp() },
                             contentPadding = PaddingValues(horizontal = 6.dp)
                         ) {
                             Surface(
