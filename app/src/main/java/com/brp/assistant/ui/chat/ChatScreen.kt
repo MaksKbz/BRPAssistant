@@ -2,7 +2,9 @@
 
 package com.brp.assistant.ui.chat
 
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -24,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -343,6 +346,12 @@ fun ChatScreen(
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     var showLlmSheet by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val openWhatsApp = {
+        val message = Uri.encode("Обратиться в компанию")
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/77014670955?text=$message"))
+        runCatching { context.startActivity(intent) }
+    }
     // #12 — локальный dismiss для healthWarning (не сбрасывает ViewModel)
     var healthDismissed by remember(healthWarning) { mutableStateOf(false) }
 
@@ -410,7 +419,27 @@ fun ChatScreen(
                     },
                     actions = {
                         TextButton(
+                            onClick = { openWhatsApp() },
+                            contentPadding = PaddingValues(horizontal = 6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = Color(0xFF25D366),
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Chat,
+                                    contentDescription = "WhatsApp: обратиться в компанию",
+                                    tint = Color.White,
+                                    modifier = Modifier.padding(4.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(3.dp))
+                            Text("WhatsApp", style = MaterialTheme.typography.labelSmall)
+                        }
+                        TextButton(
                             onClick = { showLlmSheet = true },
+
                             contentPadding = PaddingValues(horizontal = 8.dp)
                         ) {
                             Icon(
