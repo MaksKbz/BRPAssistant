@@ -74,6 +74,11 @@ class PromptBuilder @Inject constructor(
         return outdoor.any(q::contains) && vehicle.none(q::contains)
     }
 
+    private fun isComparisonQuestion(message: String): Boolean {
+        val q = message.lowercase()
+        return listOf("сравни", "сравнить", "разница", "отличие", "что лучше").any(q::contains)
+    }
+
     // ============================================================
     // ДИАГНОСТИКА
     // ============================================================
@@ -336,9 +341,11 @@ ${histBlock(history)}
     ): String {
         val baseSystem = systemPromptProvider.getSystemPrompt()
         val isGeneralOutdoor = isOutdoorGeneralQuestion(userMessage)
+        val isComparison = isComparisonQuestion(userMessage)
         val contacts = if (customSystemPrompt.isNotBlank()) "\n$customSystemPrompt" else ""
-        val vehicle = if (isGeneralOutdoor) {
-            "\nЭто общий вопрос о безопасности на природе, не о неисправности техники. Не привязывай ответ к выбранной модели."
+        val vehicle = if (isGeneralOutdoor || isComparison) {
+            if (isComparison) "\nРЕЖИМ СРАВНЕНИЯ: сравнивай только модели, названные пользователем. Не подставляй выбранную в интерфейсе технику."
+            else "\nЭто общий вопрос о безопасности на природе, не о неисправности техники. Не привязывай ответ к выбранной модели."
         } else selectedModel?.let {
             "\nТехника клиента: ${it.brand.uppercase()} ${it.modelName} ${it.modelYear}. " +
                 "Двигатель: ${it.engineName ?: "N/A"}. " +
@@ -357,7 +364,7 @@ ${histBlock(history)}
         } else ""
 
         // Чанки встроенных карточек BRP — в сжатом виде
-        val chunksSection = if (chunks.isNotEmpty() && !isGeneralOutdoor) {
+        val chunksSection = if (chunks.isNotEmpty() && !isGeneralOutdoor && !isComparison) {
             "\nФРАГМЕНТЫ ИЗ БАЗЫ BRP:\n" +
                 chunks.take(4).distinctBy { it.cardId + (it.section ?: "") }.joinToString("\n\n") { ch ->
                     val body = ch.content
@@ -369,7 +376,7 @@ ${histBlock(history)}
         } else ""
 
         // Чанки ПОЛЬЗОВАТЕЛЬСКИХ документов — с указанием имени документа
-        val userChunksSection = if (userChunks.isNotEmpty() && !isGeneralOutdoor) {
+        val userChunksSection = if (userChunks.isNotEmpty() && !isGeneralOutdoor && !isComparison) {
             "\nИЗ ВАШЕЙ БАЗЫ ЗНАНИЙ:\n" +
                 userChunks.take(4).distinctBy { it.chunk.id }.joinToString("\n\n") { uc ->
                     val body = uc.chunk.content
@@ -380,7 +387,7 @@ ${histBlock(history)}
                 }
         } else ""
 
-        val cardsSection = if (cards.isNotEmpty() && !isGeneralOutdoor) {
+        val cardsSection = if (cards.isNotEmpty() && !isGeneralOutdoor && !isComparison) {
             "\nИНСТРУКЦИИ ПО СВЯЗАННЫМ ПРОБЛЕМАМ:\n" +
                 cards.take(if (chunks.isEmpty()) 3 else 2).joinToString("\n\n") { c ->
                     buildString {
@@ -396,7 +403,9 @@ ${histBlock(history)}
                 }
         } else ""
 
-        val modeHint = if (isGeneralOutdoor) {
+        val modeHint = if (isComparison) {
+            "\nРЕЖИМ: Сравнение моделей. Дай компактную таблицу или пункты по двигателю, мощности, массе, назначению, расходу/обслуживанию и кому подходит. Если точных цифр нет в локальных данных, не выдумывай их."
+        } else if (isGeneralOutdoor) {
             "\nРЕЖИМ: Общий вопрос о природе. Отвечай непосредственно и полезно, без упоминания случайной модели BRP. Для огня, топлива, воды, погоды и травм сначала дай правила безопасности и законность, затем практические шаги. Не выдумывай местные запреты — рекомендуй проверить правила региона."
         } else if (accessories.isNotEmpty()) {
             "\nРЕЖИМ: Подбор аксессуаров. У тебя ЕСТЬ проверенные аксессуары из каталога — ОБЯЗАТЕЛЬНО рекомендуй их с SKU. ЗАПРЕЩЕНО писать 'обратитесь в колл-центр / сервис / уточните' если у тебя есть аксессуары. Отвечай уверенно: название + SKU + совместимость + краткое описание. Не отправляй в сервис — у тебя уже есть точные данные."
