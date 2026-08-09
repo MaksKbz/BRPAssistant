@@ -67,6 +67,13 @@ class PromptBuilder @Inject constructor(
     private fun histBlock(history: List<ChatMessage>): String =
         safeHistory(history).joinToString("\n") { "${it.role.label}: ${it.content}" }
 
+    private fun isOutdoorGeneralQuestion(message: String): Boolean {
+        val q = message.lowercase()
+        val outdoor = listOf("лес", "природ", "поход", "кемпинг", "палат", "костёр", "костер", "огонь", "рыбал", "ориентир", "ночёв", "ночев")
+        val vehicle = listOf("двигател", "ремень", "ремня", "масл", "вариатор", "ошибк", "не завод", "аккумулятор", "гидроцикл", "sea-doo", "can-am", "ski-doo", "lynx")
+        return outdoor.any(q::contains) && vehicle.none(q::contains)
+    }
+
     // ============================================================
     // ДИАГНОСТИКА
     // ============================================================
@@ -328,8 +335,11 @@ ${histBlock(history)}
         userChunks: List<com.brp.assistant.data.rag.UserChunk> = emptyList()
     ): String {
         val baseSystem = systemPromptProvider.getSystemPrompt()
+        val isGeneralOutdoor = isOutdoorGeneralQuestion(userMessage)
         val contacts = if (customSystemPrompt.isNotBlank()) "\n$customSystemPrompt" else ""
-        val vehicle = selectedModel?.let {
+        val vehicle = if (isGeneralOutdoor) {
+            "\nЭто общий вопрос о безопасности на природе, не о неисправности техники. Не привязывай ответ к выбранной модели."
+        } else selectedModel?.let {
             "\nТехника клиента: ${it.brand.uppercase()} ${it.modelName} ${it.modelYear}. " +
                 "Двигатель: ${it.engineName ?: "N/A"}. " +
                 "Платформа: ${it.platform ?: "N/A"}."
@@ -347,7 +357,7 @@ ${histBlock(history)}
         } else ""
 
         // Чанки встроенных карточек BRP — в сжатом виде
-        val chunksSection = if (chunks.isNotEmpty()) {
+        val chunksSection = if (chunks.isNotEmpty() && !isGeneralOutdoor) {
             "\nФРАГМЕНТЫ ИЗ БАЗЫ BRP:\n" +
                 chunks.take(4).distinctBy { it.cardId + (it.section ?: "") }.joinToString("\n\n") { ch ->
                     val body = ch.content
@@ -359,7 +369,7 @@ ${histBlock(history)}
         } else ""
 
         // Чанки ПОЛЬЗОВАТЕЛЬСКИХ документов — с указанием имени документа
-        val userChunksSection = if (userChunks.isNotEmpty()) {
+        val userChunksSection = if (userChunks.isNotEmpty() && !isGeneralOutdoor) {
             "\nИЗ ВАШЕЙ БАЗЫ ЗНАНИЙ:\n" +
                 userChunks.take(4).distinctBy { it.chunk.id }.joinToString("\n\n") { uc ->
                     val body = uc.chunk.content
@@ -370,7 +380,7 @@ ${histBlock(history)}
                 }
         } else ""
 
-        val cardsSection = if (cards.isNotEmpty()) {
+        val cardsSection = if (cards.isNotEmpty() && !isGeneralOutdoor) {
             "\nИНСТРУКЦИИ ПО СВЯЗАННЫМ ПРОБЛЕМАМ:\n" +
                 cards.take(if (chunks.isEmpty()) 3 else 2).joinToString("\n\n") { c ->
                     buildString {
@@ -386,7 +396,9 @@ ${histBlock(history)}
                 }
         } else ""
 
-        val modeHint = if (accessories.isNotEmpty()) {
+        val modeHint = if (isGeneralOutdoor) {
+            "\nРЕЖИМ: Общий вопрос о природе. Отвечай непосредственно и полезно, без упоминания случайной модели BRP. Для огня, топлива, воды, погоды и травм сначала дай правила безопасности и законность, затем практические шаги. Не выдумывай местные запреты — рекомендуй проверить правила региона."
+        } else if (accessories.isNotEmpty()) {
             "\nРЕЖИМ: Подбор аксессуаров. У тебя ЕСТЬ проверенные аксессуары из каталога — ОБЯЗАТЕЛЬНО рекомендуй их с SKU. ЗАПРЕЩЕНО писать 'обратитесь в колл-центр / сервис / уточните' если у тебя есть аксессуары. Отвечай уверенно: название + SKU + совместимость + краткое описание. Не отправляй в сервис — у тебя уже есть точные данные."
         } else if (cards.isNotEmpty()) {
             "\nРЕЖИМ: Диагностика/ремонт. Дай пошаговые действия на русском. Начни с безопасности. " +
