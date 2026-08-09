@@ -48,6 +48,16 @@ class DiagnoseUseCase @Inject constructor(
         onPartial: (String) -> Unit,
         forceRemote: Boolean = false
     ): Flow<Result<DiagnosisResult>> = flow {
+        OfflineGeneralSafetyAnswer.answerFor(message)?.let { safeAnswer ->
+            onPartial(safeAnswer)
+            emit(Result.success(DiagnosisResult(
+                message = safeAnswer,
+                riskLevel = "high",
+                sources = listOf("Офлайн-правила безопасности на природе"),
+                requiresEvacuation = false
+            )))
+            return@flow
+        }
         try {
             val provider = settingsRepository.aiProvider.first() ?: "Gemini"
             val apiKey = if (provider == "Gemini")
@@ -196,6 +206,11 @@ class ChatUseCase @Inject constructor(
         onPartial: (String) -> Unit,
         forceRemote: Boolean = false
     ): Result<String> {
+        OfflineGeneralSafetyAnswer.answerFor(message)?.let { safeAnswer ->
+            onPartial(safeAnswer)
+            return Result.success(safeAnswer)
+        }
+
         val provider = settingsRepository.aiProvider.first() ?: "Gemini"
         val apiKey = if (provider == "Gemini")
             settingsRepository.geminiApiKey.first()
