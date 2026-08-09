@@ -117,6 +117,9 @@ class ChatViewModel @Inject constructor(
         set(value) { savedState[KEY_MODE] = value }
 
     private var generationJob: Job? = null
+    /** Monotonically increasing guard prevents stale native callbacks from an older request
+     * updating the newest assistant bubble after the user sends a second message. */
+    private var generationSequence: Long = 0L
 
     init {
         // A3 — если процесс убит и пересоздан, восстанавливаем сессию
@@ -491,6 +494,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(text: String, mode: String, vehicleId: String?, vehicleName: String? = null) {
+        val requestSequence = ++generationSequence
         generationJob?.cancel()
 
         val userMsg = ChatMessage(content = text, role = MessageRole.USER)
@@ -538,7 +542,8 @@ class ChatViewModel @Inject constructor(
                 // на каждый токен (20-50 раз/с), что тормозило UI на слабых девайсах.
                 var lastUpdate = 0L
                 var pendingContent = ""
-                val throttledPartial: (String) -> Unit = { text ->
+                val throttledPartial: (String) -> Unit = partial@{ text ->
+                    if (requestSequence != generationSequence) return@partial
                     assistantContent += text
                     pendingContent = assistantContent
                     val now = System.currentTimeMillis()
@@ -550,6 +555,7 @@ class ChatViewModel @Inject constructor(
 
                 if (mode == "diagnosis") {
                     diagnoseUseCase(text, effectiveVehicleId, history, throttledPartial, forceRemote = forceRemote).collect { result ->
+                        if (requestSequence != generationSequence) return@collect
                         // Проталкиваем финальное состояние после завершения стрима
                         if (pendingContent != assistantContent || pendingContent.isNotEmpty()) {
                             updateLastMessage(assistantContent)
@@ -576,6 +582,7 @@ class ChatViewModel @Inject constructor(
                         else        -> RetrievalMode.BOTH
                     }
                     val result = chatUseCase(text, retrievalMode, effectiveVehicleId, history, throttledPartial, forceRemote = forceRemote)
+                    if (requestSequence != generationSequence) return@launch
                     if (pendingContent != assistantContent) updateLastMessage(assistantContent)
                     _state.update { it.copy(isGenerating = false) }
                     if (result.isFailure) {
@@ -587,14 +594,18 @@ class ChatViewModel @Inject constructor(
                     }
                 }
 
-                persistMessages(sessionId, resolvedVehicleName)
+                if (requestSequence == generationSequence) {
+                    persistMessages(sessionId, resolvedVehicleName)
+                }
 
             } catch (oom: OutOfMemoryError) {
+                if (requestSequence != generationSequence) return@launch
                 val oomMsg = "💾 Модель не поместилась в память. Попробуйте легкую модель или перезапустите приложение."
                 _state.update { it.copy(isGenerating = false, error = oomMsg) }
                 updateLastMessage(oomMsg)
                 withContext(Dispatchers.Default) { System.gc() }
             } catch (e: Exception) {
+                if (requestSequence != generationSequence) return@launch
                 val errMsg = e.message ?: "Неизвестная ошибка выполнения"
                 _state.update { it.copy(isGenerating = false, error = errMsg) }
                 updateLastMessage("❌ Критическая ошибка: $errMsg")
