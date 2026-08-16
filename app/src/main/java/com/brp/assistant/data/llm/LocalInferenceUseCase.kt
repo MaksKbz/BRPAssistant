@@ -6,6 +6,7 @@ import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.domain.InferenceBenchmark
 import com.brp.assistant.domain.InferenceResourceMonitor
+import com.brp.assistant.domain.LocalResponseQualityGuard
 import com.brp.assistant.domain.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -178,10 +179,22 @@ class LocalInferenceUseCase @Inject constructor(
         Log.d(TAG, "Sending prompt (${prompt.length} chars) to local model")
         val startedAt = System.nanoTime()
         var firstTokenAt: Long? = null
-        val result = engine.generateResponse(prompt, { partial ->
+        val bufferBeforeValidation = prompt.contains("РЕЖИМ СРАВНЕНИЯ")
+        val buffered = StringBuilder()
+        val rawResult = engine.generateResponse(prompt, { partial ->
             if (firstTokenAt == null && partial.isNotEmpty()) firstTokenAt = System.nanoTime()
-            onPartial(partial)
+            if (bufferBeforeValidation) buffered.append(partial) else onPartial(partial)
         })
+        val result = rawResult.fold(
+            onSuccess = { text ->
+                val finalText = if (bufferBeforeValidation && buffered.isNotEmpty()) buffered.toString() else text
+                LocalResponseQualityGuard.validate(prompt, finalText).fold(
+                    onSuccess = { if (bufferBeforeValidation) onPartial(finalText); Result.success(finalText) },
+                    onFailure = { Result.failure(it) }
+                )
+            },
+            onFailure = { Result.failure(it) }
+        )
         val finishedAt = System.nanoTime()
         val afterResources = resourceMonitor.checkMemory()
         val output = result.getOrNull().orEmpty()
