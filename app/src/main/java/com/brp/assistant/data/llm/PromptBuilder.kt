@@ -4,6 +4,8 @@ import com.brp.assistant.data.db.entities.Accessory
 import com.brp.assistant.data.db.entities.BrpModel
 import com.brp.assistant.data.db.entities.KnowledgeCard
 import com.brp.assistant.data.db.entities.KnowledgeChunk
+import com.brp.assistant.domain.QuestionIntent
+import com.brp.assistant.domain.QuestionIntentRouter
 import com.brp.assistant.domain.model.ChatMessage
 import javax.inject.Inject
 
@@ -67,17 +69,11 @@ class PromptBuilder @Inject constructor(
     private fun histBlock(history: List<ChatMessage>): String =
         safeHistory(history).joinToString("\n") { "${it.role.label}: ${it.content}" }
 
-    private fun isOutdoorGeneralQuestion(message: String): Boolean {
-        val q = message.lowercase()
-        val outdoor = listOf("лес", "природ", "поход", "кемпинг", "палат", "костёр", "костер", "огонь", "рыбал", "ориентир", "ночёв", "ночев")
-        val vehicle = listOf("двигател", "ремень", "ремня", "масл", "вариатор", "ошибк", "не завод", "аккумулятор", "гидроцикл", "sea-doo", "can-am", "ski-doo", "lynx")
-        return outdoor.any(q::contains) && vehicle.none(q::contains)
-    }
+    private fun isOutdoorGeneralQuestion(message: String): Boolean =
+        QuestionIntentRouter.classify(message) == QuestionIntent.GENERAL_OUTDOOR
 
-    private fun isComparisonQuestion(message: String): Boolean {
-        val q = message.lowercase()
-        return listOf("сравни", "сравнить", "разница", "отличие", "что лучше").any(q::contains)
-    }
+    private fun isComparisonQuestion(message: String): Boolean =
+        QuestionIntentRouter.classify(message) == QuestionIntent.COMPARE_MODELS
 
     // ============================================================
     // ДИАГНОСТИКА
